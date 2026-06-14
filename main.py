@@ -100,14 +100,15 @@ def CL(text, size=16, color=TEXT, bold=False, **kw):
 
 class RoundButton(Button):
     """圆角扁平按钮。"""
-    def __init__(self, text="", bg=PRIMARY, fg=(1, 1, 1, 1), fsize=16, bold=True, **kw):
+    def __init__(self, text="", bg=PRIMARY, fg=(1, 1, 1, 1), fsize=16, bold=True,
+                 radius=12, **kw):
         super().__init__(text=text, font_name=FONT, font_size=dp(fsize), bold=bold,
                          background_normal="", background_color=(0, 0, 0, 0),
                          color=fg, **kw)
         self._bg = bg
         with self.canvas.before:
             self._col = Color(*bg)
-            self._rect = RoundedRectangle(radius=[dp(12)])
+            self._rect = RoundedRectangle(radius=[dp(radius)])
         self.bind(pos=self._sync, size=self._sync)
 
     def _sync(self, *a):
@@ -191,14 +192,20 @@ class LoginScreen(Screen):
         self.pwd = field("请输入密码", password=True)
         card.add_widget(self.pwd)
 
-        # 记住我：用复选框（CheckBox）
-        rm = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        self.remember = CheckBox(active=False, size_hint_x=None, width=dp(36), color=PRIMARY)
-        rm.add_widget(self.remember)
-        rm_lbl = CL("记住我（下次自动登录）", size=14, color=TEXT, halign="left",
-                    valign="middle", text_size=(dp(240), dp(40)))
-        rm_lbl.bind(on_touch_down=lambda w, t: (self._toggle_remember()
-                    if w.collide_point(*t.pos) else None))
+        # 记住我：按钮式开关（CheckBox 在部分安卓机型点不动），方框和文字都可点
+        rm = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        self._remember_on = False
+        self.remember_btn = RoundButton("", bg=GREY, fg=(1, 1, 1, 1), fsize=12, radius=4,
+                                        size_hint=(None, None), width=dp(20), height=dp(20),
+                                        pos_hint={"center_y": 0.5})
+        self.remember_btn.bind(on_release=lambda *a: self._toggle_remember())
+        rm.add_widget(self.remember_btn)
+        rm_lbl = Button(text="记住我（下次自动登录）", font_name=FONT, font_size=dp(14),
+                        background_normal="", background_down="",
+                        background_color=(0, 0, 0, 0), color=TEXT,
+                        halign="left", valign="middle")
+        rm_lbl.bind(size=lambda w, s: setattr(w, "text_size", s))
+        rm_lbl.bind(on_release=lambda *a: self._toggle_remember())
         rm.add_widget(rm_lbl)
         card.add_widget(rm)
 
@@ -217,14 +224,24 @@ class LoginScreen(Screen):
         root.add_widget(Label())  # 底部弹簧
         self.add_widget(root)
 
-    def _toggle_remember(self):
-        self.remember.active = not self.remember.active
-
-        # 预填记住的凭据
+        # 预填「记住我」凭据（之前这段被误放进了 _toggle_remember，导致开机不自动填）
         creds = remember.load()
         if creds:
             self.user.text, self.pwd.text = creds[0], creds[1]
-            self.remember.active = True
+            self._remember_on = True
+        self._update_remember()
+
+    def _toggle_remember(self):
+        self._remember_on = not self._remember_on
+        self._update_remember()
+
+    def _update_remember(self):
+        if self._remember_on:
+            self.remember_btn.set_bg(SUCCESS)
+            self.remember_btn.text = "√"   # √
+        else:
+            self.remember_btn.set_bg(GREY)
+            self.remember_btn.text = ""
 
     def do_login(self):
         u, p = self.user.text.strip(), self.pwd.text
@@ -235,7 +252,7 @@ class LoginScreen(Screen):
         if not user:
             toast("用户名或密码不正确")
             return
-        if self.remember.active:
+        if self._remember_on:
             remember.save(u, p)
         else:
             remember.clear()
@@ -1141,7 +1158,8 @@ class StudyApp(App):
     def enter_login(self):
         self.login_screen.user.text = ""
         self.login_screen.pwd.text = ""
-        self.login_screen.remember.active = False
+        self.login_screen._remember_on = False
+        self.login_screen._update_remember()
         self.sm.current = "login"
 
 
