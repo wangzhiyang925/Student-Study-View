@@ -7,9 +7,9 @@ package.domain = org.xuexi
 
 # 源码与资源
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,ttf,json,db
-# 确保种子数据与字体被打包
-source.include_patterns = assets/*,assets/fonts/*,core/seed/*
+source.include_exts = py,png,kv,atlas,ttf,json,db
+# 只打包字体与种子数据；assets/image 里的演示截图不进 APK（仅用于 README 展示）
+source.include_patterns = assets/fonts/*,core/seed/*
 
 version = 1.0
 
