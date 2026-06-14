@@ -4,11 +4,19 @@
 （数据库、统计、邮件、记住密码）。已把桌面版现有的 **配置和数据库一并导入**
 （见 `core/seed/`），首次安装运行即带有原来的账号、打卡记录和邮箱设置。
 
-## 📱 演示截图（真机运行）
+## 📱 界面截图（全部页面）
 
-| 每日打卡 / 计时 | 学习统计 |
+| 登录 | 注册 | 每日打卡 / 计时 |
+|:---:|:---:|:---:|
+| <img src="assets/image/screen-login.png" width="230"> | <img src="assets/image/screen-register.png" width="230"> | <img src="assets/image/screen-checkin.png" width="230"> |
+| **学习统计** | **管理中心（邮箱 / 类目）** | **管理中心（反馈 / 数据备份）** |
+| <img src="assets/image/screen-stats.png" width="230"> | <img src="assets/image/screen-admin.png" width="230"> | <img src="assets/image/screen-admin2.png" width="230"> |
+
+> 真机运行截图：
+
+| 每日打卡（真机） | 学习统计（真机） |
 |:---:|:---:|
-| <img src="assets/image/Student-stydy-view-01.jpg" width="260"> | <img src="assets/image/Student-stydy-view-02.jpg" width="260"> |
+| <img src="assets/image/Student-stydy-view-01.jpg" width="230"> | <img src="assets/image/Student-stydy-view-02.jpg" width="230"> |
 
 ## ✨ 功能（与桌面版一致）
 - 登录 / 注册，**记住我**自动登录
