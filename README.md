@@ -12,12 +12,6 @@
 | **学习统计** | **管理中心（邮箱 / 类目）** | **管理中心（反馈 / 数据备份）** |
 | <img src="assets/image/screen-stats.png" width="230"> | <img src="assets/image/screen-admin.png" width="230"> | <img src="assets/image/screen-admin2.png" width="230"> |
 
-> 真机运行截图：
-
-| 每日打卡（真机） | 学习统计（真机） |
-|:---:|:---:|
-| <img src="assets/image/Student-stydy-view-01.jpg" width="230"> | <img src="assets/image/Student-stydy-view-02.jpg" width="230"> |
-
 ## ✨ 功能（与桌面版一致）
 - 登录 / 注册，**记住我**自动登录
 - 语文 / 数学 / 英语 分科目打卡
