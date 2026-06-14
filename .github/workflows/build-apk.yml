@@ -3,7 +3,7 @@ name: 构建安卓 APK
 # 推送到 main/master 或在 Actions 页面手动触发时运行
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, APK ]
   workflow_dispatch:
 
 jobs:
