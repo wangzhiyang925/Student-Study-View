@@ -1,0 +1,22 @@
+# 安卓版是独立项目（已在 APK 分支），不并入桌面版分支
+安卓版/
+
+# 运行时数据：数据库 + 记住密码（含登录态），不提交
+data/
+localdata/
+
+# 含密码的真实配置不提交（仅提交 config.example.json 模板）
+config.json
+
+# Python
+__pycache__/
+*.pyc
+
+# 临时/日志
+app_err.log
+app_out.log
+
+# 编辑器 / 工具
+.claude/
+.idea/
+.vscode/
