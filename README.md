@@ -86,4 +86,4 @@ python main.py
 
 <img src="docs/donate-qr.jpg" width="240" alt="微信打赏码">
 
-> 微信支付 · 收款人：王芝杨
+> 微信扫一扫，即可打赏
