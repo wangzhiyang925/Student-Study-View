@@ -3,6 +3,17 @@
 一套面向中小学生的桌面应用，记录语文 📚、数学 🔢、英语 🔤 等学科的每日学习打卡，
 并能把统计报告**定时自动发送到家长邮箱**。界面采用明亮童趣的配色，操作简单。
 
+## 📥 下载安装（安卓手机）
+
+**👉 [点此下载最新版 APK（studyapp-1.0-arm64-v8a-debug.apk）](https://github.com/wangzhiyang925/Student-Study-View/releases/download/apk-latest/studyapp-1.0-arm64-v8a-debug.apk)**
+
+1. 用手机浏览器打开上面的链接，下载 `.apk` 文件；
+2. 点击安装 —— 首次需在系统设置里允许「安装未知来源应用」；
+3. 打开 App，用默认管理员 `admin` / `admin123` 登录即可体验。
+
+> 适配 arm64 架构（覆盖 2017 年后绝大多数安卓手机）。该地址始终指向**最新构建**，每次更新自动同步。
+> 也可在 [Releases 页面](https://github.com/wangzhiyang925/Student-Study-View/releases/tag/apk-latest) 查看。
+
 ## 📱 界面截图（全部页面）
 
 | 登录 | 注册 | 每日打卡 / 计时 |
