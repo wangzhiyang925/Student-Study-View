@@ -1,0 +1,14 @@
+# Buildozer / 构建产物
+.buildozer/
+bin/
+*.apk
+*.aab
+
+# 本地运行数据（不提交，避免把本机登录态/数据库带上云）
+localdata/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
