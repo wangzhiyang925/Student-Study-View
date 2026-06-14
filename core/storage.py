@@ -55,6 +55,58 @@ def _copy_if_absent(seed_name, dest):
             pass
 
 
+def external_dir():
+    """返回一个用户可通过文件管理器访问的备份目录。
+
+    安卓：应用外部 files 目录（路径形如 Android/data/<包名>/files/backup，
+    无需额外权限即可用文件管理器/数据线访问）；桌面：项目同级 export/backup。
+    """
+    base = None
+    if is_android():
+        try:
+            from jnius import autoclass
+            ctx = autoclass("org.kivy.android.PythonActivity").mActivity
+            d = ctx.getExternalFilesDir(None)
+            if d is not None:
+                base = d.getAbsolutePath()
+        except Exception:
+            base = None
+    if not base:
+        base = os.path.join(os.path.dirname(DATA_DIR), "export") if not is_android() else DATA_DIR
+    path = os.path.join(base, "backup")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def export_files():
+    """把当前 config.json 和 study.db 复制到备份目录。
+
+    返回 (备份目录, [已导出文件名列表])。
+    """
+    dst = external_dir()
+    done = []
+    for src, name in [(CONFIG_PATH, "config.json"), (DB_PATH, "study.db")]:
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(dst, name))
+            done.append(name)
+    return dst, done
+
+
+def import_files():
+    """从备份目录把 config.json / study.db 覆盖回工作目录（恢复）。
+
+    返回 (备份目录, [已覆盖文件名列表])。
+    """
+    src_dir = external_dir()
+    done = []
+    for name, dst in [("config.json", CONFIG_PATH), ("study.db", DB_PATH)]:
+        src = os.path.join(src_dir, name)
+        if os.path.exists(src):
+            shutil.copyfile(src, dst)
+            done.append(name)
+    return src_dir, done
+
+
 def init_storage():
     """首次运行导入种子数据。
 

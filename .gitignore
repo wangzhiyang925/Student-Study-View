@@ -15,3 +15,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# 桌面预览导出测试目录
+export/

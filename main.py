@@ -21,7 +21,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
-from kivy.uix.switch import Switch
+from kivy.uix.checkbox import CheckBox
 from kivy.uix.spinner import Spinner, SpinnerOption
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
@@ -145,6 +145,24 @@ def toast(msg):
     Clock.schedule_once(lambda dt: p.dismiss(), 1.6)
 
 
+def confirm(msg, on_yes):
+    """简单的确认对话框（确定 / 取消）。"""
+    box = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(12))
+    box.add_widget(CL(msg, size=15, color=TEXT, halign="center", valign="middle",
+                      text_size=(Window.width * 0.7, None)))
+    btns = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(10))
+    p = Popup(title="确认", title_font=FONT, content=box,
+              size_hint=(0.85, None), height=dp(220))
+    yes = RoundButton("确定", bg=PRIMARY, fsize=15)
+    yes.bind(on_release=lambda *a: (p.dismiss(), on_yes()))
+    no = RoundButton("取消", bg=GREY, fg=TEXT, fsize=15)
+    no.bind(on_release=lambda *a: p.dismiss())
+    btns.add_widget(yes)
+    btns.add_widget(no)
+    box.add_widget(btns)
+    p.open()
+
+
 # ================= 登录界面 =================
 class LoginScreen(Screen):
     def __init__(self, **kw):
@@ -159,7 +177,9 @@ class LoginScreen(Screen):
         root.add_widget(CL("记录每天的努力", size=14, color=MUTED,
                            size_hint_y=None, height=dp(26)))
 
-        card = card_box(padding=18, spacing=12, size_hint_y=None, height=dp(330))
+        # 卡片自适应高度，保证所有控件（含按钮）等宽对齐输入框
+        card = card_box(padding=18, spacing=12, size_hint_y=None)
+        card.bind(minimum_height=card.setter("height"))
         card.add_widget(CL("用户名", size=14, color=TEXT, halign="left",
                            size_hint_y=None, height=dp(22), text_size=(dp(260), None)))
         self.user = field("请输入用户名")
@@ -169,26 +189,34 @@ class LoginScreen(Screen):
         self.pwd = field("请输入密码", password=True)
         card.add_widget(self.pwd)
 
-        rm = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        self.remember = Switch(active=False, size_hint_x=None, width=dp(70))
-        rm.add_widget(CL("记住我（下次自动登录）", size=14, color=TEXT, halign="left",
-                         valign="middle", text_size=(dp(200), dp(40))))
+        # 记住我：用复选框（CheckBox）
+        rm = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+        self.remember = CheckBox(active=False, size_hint_x=None, width=dp(36), color=PRIMARY)
         rm.add_widget(self.remember)
+        rm_lbl = CL("记住我（下次自动登录）", size=14, color=TEXT, halign="left",
+                    valign="middle", text_size=(dp(240), dp(40)))
+        rm_lbl.bind(on_touch_down=lambda w, t: (self._toggle_remember()
+                    if w.collide_point(*t.pos) else None))
+        rm.add_widget(rm_lbl)
         card.add_widget(rm)
 
+        # 登录 / 注册 按钮都放进卡片，宽度与上方输入框一致
         self.login_btn = RoundButton("登 录", bg=PRIMARY, fsize=18,
                                      size_hint_y=None, height=dp(48))
         self.login_btn.bind(on_release=lambda *a: self.do_login())
         card.add_widget(self.login_btn)
+        reg = RoundButton("注册新同学", bg=SECONDARY, size_hint_y=None, height=dp(46))
+        reg.bind(on_release=lambda *a: self.show_register())
+        card.add_widget(reg)
         root.add_widget(card)
 
-        reg = RoundButton("注册新同学", bg=SECONDARY, size_hint_y=None, height=dp(44))
-        reg.bind(on_release=lambda *a: self.show_register())
-        root.add_widget(reg)
         root.add_widget(CL("默认管理员  admin / admin123", size=12, color=MUTED,
                            size_hint_y=None, height=dp(30)))
         root.add_widget(Label())  # 底部弹簧
         self.add_widget(root)
+
+    def _toggle_remember(self):
+        self.remember.active = not self.remember.active
 
         # 预填记住的凭据
         creds = remember.load()
@@ -413,6 +441,7 @@ class MainScreen(Screen):
         self.records_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
         self.records_box.bind(minimum_height=self.records_box.setter("height"))
         body.add_widget(self.records_box)
+        body.add_widget(Label(size_hint_y=None, height=dp(24)))  # 底部留白，避免被导航条遮挡
 
         sv.add_widget(body)
         Clock.schedule_once(lambda dt: self.refresh_checkin(), 0)
@@ -613,6 +642,7 @@ class MainScreen(Screen):
         send = RoundButton("把我的报告发送到家长邮箱", bg=PRIMARY, size_hint_y=None, height=dp(48))
         send.bind(on_release=lambda *a: self.send_my_report())
         body.add_widget(send)
+        body.add_widget(Label(size_hint_y=None, height=dp(24)))
 
         sv.add_widget(body)
         Clock.schedule_once(lambda dt: self.refresh_stats(), 0)
@@ -752,9 +782,60 @@ class MainScreen(Screen):
         rc.add_widget(self.recip_box)
         body.add_widget(rc)
 
+        # 意见反馈（发送给开发者）
+        fb = card_box(padding=12, spacing=8, size_hint_y=None)
+        fb.bind(minimum_height=fb.setter("height"))
+        fb.add_widget(CL("意见反馈（默认发送到 416091859@qq.com）", size=14, bold=True,
+                         color=SUCCESS, size_hint_y=None, height=dp(24), halign="left",
+                         text_size=(Window.width - dp(54), None)))
+        self.fb_email = field("你的联系邮箱（方便回复）")
+        fb.add_widget(self.fb_email)
+        self.fb_content = TextInput(hint_text="写下你的意见或建议…", font_name=FONT,
+                                    font_size=dp(15), size_hint_y=None, height=dp(90),
+                                    background_color=(0.96, 0.97, 0.99, 1),
+                                    foreground_color=TEXT)
+        fb.add_widget(self.fb_content)
+        fbtn = RoundButton("发送反馈", bg=SUCCESS, size_hint_y=None, height=dp(44))
+        fbtn.bind(on_release=lambda *a: self.send_feedback())
+        fb.add_widget(fbtn)
+        body.add_widget(fb)
+
+        # 数据管理：显示配置/数据文件路径，支持导出（备份）与覆盖（恢复）
+        dm = card_box(padding=12, spacing=8, size_hint_y=None)
+        dm.bind(minimum_height=dm.setter("height"))
+        dm.add_widget(CL("数据管理（备份 / 恢复）", size=14, bold=True, color=PURPLE,
+                         size_hint_y=None, height=dp(24), halign="left",
+                         text_size=(Window.width - dp(54), None)))
+
+        def path_line(title, value):
+            lbl = CL(f"{title}：\n{value}", size=11, color=TEXT, halign="left",
+                     valign="top", text_size=(Window.width - dp(60), None),
+                     size_hint_y=None)
+            lbl.bind(texture_size=lambda w, s: setattr(w, "height", s[1] + dp(4)))
+            return lbl
+
+        dm.add_widget(path_line("配置文件", storage.CONFIG_PATH))
+        dm.add_widget(path_line("数据文件", storage.DB_PATH))
+        dm.add_widget(path_line("备份目录", storage.external_dir()))
+
+        row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+        eb = RoundButton("导出（备份）", bg=SECONDARY, fsize=14)
+        eb.bind(on_release=lambda *a: self.export_data())
+        ib = RoundButton("覆盖（恢复）", bg=PRIMARY, fsize=14)
+        ib.bind(on_release=lambda *a: self.import_data())
+        row.add_widget(eb)
+        row.add_widget(ib)
+        dm.add_widget(row)
+        dm.add_widget(CL("导出：把配置和数据复制到上面的备份目录；"
+                         "覆盖：用备份目录里的同名文件覆盖当前数据。", size=10, color=MUTED,
+                         size_hint_y=None, height=dp(34), halign="left",
+                         text_size=(Window.width - dp(54), None)))
+        body.add_widget(dm)
+
         sendnow = RoundButton("立即发送全体汇总", bg=PRIMARY, size_hint_y=None, height=dp(48))
         sendnow.bind(on_release=lambda *a: self.send_overview())
         body.add_widget(sendnow)
+        body.add_widget(Label(size_hint_y=None, height=dp(24)))
 
         sv.add_widget(body)
         Clock.schedule_once(lambda dt: (self.refresh_recipients(), self.refresh_subjects()), 0)
@@ -845,6 +926,60 @@ class MainScreen(Screen):
             ok, info = email_service.send_overview_now()
             self._show_async(info)
         threading.Thread(target=worker, daemon=True).start()
+
+    def send_feedback(self):
+        contact = self.fb_email.text.strip()
+        content = self.fb_content.text.strip()
+        if not content:
+            toast("请先填写反馈内容"); return
+        toast("正在发送反馈…")
+
+        def worker():
+            text = (f"来自学习小管家的用户反馈\n\n联系邮箱：{contact or '(未填写)'}\n\n"
+                    f"反馈内容：\n{content}")
+            html = ("<div style='font-family:sans-serif;font-size:15px'>"
+                    "<h3>学习小管家 · 用户反馈</h3>"
+                    f"<p><b>联系邮箱：</b>{contact or '(未填写)'}</p>"
+                    f"<p><b>反馈内容：</b></p><p>{content}</p></div>")
+            ok, info = email_service.send_email("学习小管家 用户反馈", text, html,
+                                                ["416091859@qq.com"])
+            self._show_async(info)
+            if ok:
+                self._clear_feedback()
+        threading.Thread(target=worker, daemon=True).start()
+
+    @mainthread
+    def _clear_feedback(self):
+        self.fb_content.text = ""
+        self.fb_email.text = ""
+
+    # ---------- 数据导出 / 覆盖 ----------
+    def export_data(self):
+        try:
+            dst, done = storage.export_files()
+            if done:
+                toast("已导出 " + "、".join(done) + " 到\n" + dst)
+            else:
+                toast("没有可导出的文件")
+        except Exception as e:
+            toast(f"导出失败：{e}")
+
+    def import_data(self):
+        def do():
+            try:
+                src, done = storage.import_files()
+                if done:
+                    toast("已用备份覆盖 " + "、".join(done))
+                    try:
+                        self.refresh_recipients()
+                        self.refresh_subjects()
+                    except Exception:
+                        pass
+                else:
+                    toast("备份目录里没有 config.json / study.db：\n" + src)
+            except Exception as e:
+                toast(f"覆盖失败：{e}")
+        confirm("确定用备份目录里的文件覆盖当前配置和数据吗？\n（当前数据会被替换）", do)
 
     # ---------- 退出 ----------
     def logout(self):

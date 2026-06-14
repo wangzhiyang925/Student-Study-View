@@ -6,6 +6,10 @@ on:
     branches: [ main, master, APK ]
   workflow_dispatch:
 
+# 发布 Release 需要写权限
+permissions:
+  contents: write
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -48,9 +52,18 @@ jobs:
       - name: 列出产物
         run: ls -la bin/ || true
 
-      - name: 上传 APK
+      - name: 上传 APK (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: studyapp-debug-apk
           path: bin/*.apk
           if-no-files-found: error
+
+      - name: 发布到 Release（可匿名直接下载）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: 学习小管家 · 最新 APK
+          body: 每次构建自动更新；直接下载下方的 .apk 安装到安卓手机即可。
+          files: bin/*.apk
+          fail_on_unmatched_files: true
