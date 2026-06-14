@@ -25,10 +25,11 @@ from kivy.uix.switch import Switch
 from kivy.uix.spinner import Spinner, SpinnerOption
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
+from kivy.uix.image import Image
 from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp
 
-from core import storage, database as db, remember, stats, email_service
+from core import storage, database as db, remember, stats, email_service, media
 
 # ---------------- 字体 ----------------
 FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -53,6 +54,25 @@ GREY      = (0.85, 0.85, 0.85, 1)
 
 SUBJECT_COLORS = {"语文": PRIMARY, "数学": SECONDARY, "英语": SUCCESS}
 MOODS = ["超棒", "开心", "一般", "有点累", "加油"]
+
+
+def hex_to_rgba(h):
+    h = (h or "#4D96FF").lstrip("#")
+    try:
+        return (int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255, 1)
+    except Exception:
+        return SECONDARY
+
+
+def subject_color(name):
+    """按数据库里科目的配色取色；取不到则回退。"""
+    try:
+        cm = db.subject_color_map()
+        if name in cm:
+            return hex_to_rgba(cm[name])
+    except Exception:
+        pass
+    return SUBJECT_COLORS.get(name, SECONDARY)
 
 
 # ---------------- 通用控件 ----------------
@@ -241,6 +261,7 @@ class MainScreen(Screen):
         self.timer_event = None
         self.cur_subject = "语文"
         self.cur_mood = "开心"
+        self.pending_media = []   # 本次打卡待附加的 [(type, path)]
 
     def set_user(self, user):
         self.user = user
@@ -305,17 +326,23 @@ class MainScreen(Screen):
                            size_hint_y=None, height=dp(34), halign="left",
                            text_size=(Window.width - dp(28), None)))
 
-        # 选择科目
+        # 选择科目（动态，管理员可在「管理中心」增删类目）
         body.add_widget(CL("选择科目", size=15, bold=True, size_hint_y=None, height=dp(24),
                            halign="left", text_size=(Window.width - dp(28), None)))
-        subj_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(8))
+        names = db.subject_names()
+        if self.cur_subject not in names:
+            self.cur_subject = names[0] if names else "语文"
+        cols = 3
+        rows_n = max(1, (len(names) + cols - 1) // cols)
+        subj_grid = GridLayout(cols=cols, spacing=dp(8), size_hint_y=None,
+                               height=dp(50) * rows_n + dp(8) * (rows_n - 1))
         self.subject_btns = {}
-        for s in db.SUBJECTS:
-            b = RoundButton(s, bg=GREY, fg=MUTED, fsize=16)
+        for s in names:
+            b = RoundButton(s, bg=GREY, fg=MUTED, fsize=15, size_hint_y=None, height=dp(50))
             b.bind(on_release=lambda *a, x=s: self.pick_subject(x))
-            subj_row.add_widget(b)
+            subj_grid.add_widget(b)
             self.subject_btns[s] = b
-        body.add_widget(subj_row)
+        body.add_widget(subj_grid)
         self.pick_subject(self.cur_subject)
 
         # 计时打卡
@@ -329,30 +356,45 @@ class MainScreen(Screen):
         timer_card.add_widget(self.timer_btn)
         body.add_widget(timer_card)
 
-        # 手动时长
-        man = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
-        man.add_widget(CL("时长(分钟)", size=14, size_hint_x=None, width=dp(86),
-                          halign="left", valign="middle", text_size=(dp(86), dp(46))))
-        self.minutes_in = field("30", text="30")
-        man.add_widget(self.minutes_in)
-        body.add_widget(man)
+        # 以下统一「上方文字 + 下方输入/选择」的排版，整齐一致
+        def section_label(txt):
+            return CL(txt, size=14, bold=True, size_hint_y=None, height=dp(24),
+                      halign="left", text_size=(Window.width - dp(28), None))
 
-        # 内容
-        body.add_widget(CL("今天学了什么", size=14, size_hint_y=None, height=dp(22),
-                           halign="left", text_size=(Window.width - dp(28), None)))
+        # 时长（分钟）
+        body.add_widget(section_label("时长（分钟）"))
+        self.minutes_in = field("30", text="30")
+        body.add_widget(self.minutes_in)
+
+        # 今天学了什么
+        body.add_widget(section_label("今天学了什么"))
         self.content_in = TextInput(hint_text="写一句今天学了什么吧", font_name=FONT,
-                                    font_size=dp(15), size_hint_y=None, height=dp(70),
+                                    font_size=dp(15), size_hint_y=None, height=dp(80),
                                     background_color=(0.96, 0.97, 0.99, 1),
                                     foreground_color=TEXT)
         body.add_widget(self.content_in)
 
         # 心情
-        mood_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-        mood_row.add_widget(CL("心情", size=14, size_hint_x=None, width=dp(50),
-                               halign="left", valign="middle", text_size=(dp(50), dp(44))))
+        body.add_widget(section_label("心情"))
         self.mood_spinner = cn_spinner(self.cur_mood, MOODS, WARNING, TEXT)
-        mood_row.add_widget(self.mood_spinner)
-        body.add_widget(mood_row)
+        body.add_widget(self.mood_spinner)
+
+        # 附件：拍照 / 录音 / 录视频
+        body.add_widget(section_label("添加附件（照片 / 录音 / 视频）"))
+        media_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(46))
+        photo_btn = RoundButton("拍照", bg=SECONDARY, fsize=14)
+        photo_btn.bind(on_release=lambda *a: self.capture_photo())
+        self.audio_btn = RoundButton("录音", bg=PURPLE, fsize=14)
+        self.audio_btn.bind(on_release=lambda *a: self.toggle_audio())
+        video_btn = RoundButton("录视频", bg=WARNING, fg=TEXT, fsize=14)
+        video_btn.bind(on_release=lambda *a: self.capture_video())
+        for b in (photo_btn, self.audio_btn, video_btn):
+            media_row.add_widget(b)
+        body.add_widget(media_row)
+        self.media_status = CL("", size=12, color=MUTED, size_hint_y=None, height=dp(22),
+                               halign="left", text_size=(Window.width - dp(28), None))
+        body.add_widget(self.media_status)
+        self._update_media_status()
 
         done = RoundButton("完成打卡", bg=SUCCESS, fsize=17, size_hint_y=None, height=dp(50))
         done.bind(on_release=lambda *a: self.submit_manual())
@@ -380,9 +422,60 @@ class MainScreen(Screen):
         self.cur_subject = s
         for x, b in self.subject_btns.items():
             if x == s:
-                b.set_bg(SUBJECT_COLORS[x]); b.color = (1, 1, 1, 1)
+                b.set_bg(subject_color(x)); b.color = (1, 1, 1, 1)
             else:
                 b.set_bg(GREY); b.color = MUTED
+
+    # ---------- 附件：拍照 / 录音 / 录视频 ----------
+    def _update_media_status(self):
+        if not getattr(self, "media_status", None):
+            return
+        if not self.pending_media:
+            self.media_status.text = ""
+            return
+        cnt = {"photo": 0, "audio": 0, "video": 0}
+        for tp, _ in self.pending_media:
+            cnt[tp] = cnt.get(tp, 0) + 1
+        self.media_status.text = (f"已附加：照片 {cnt['photo']}、录音 {cnt['audio']}、"
+                                  f"视频 {cnt['video']}（完成打卡时一并保存）")
+
+    @mainthread
+    def _add_pending(self, mtype, path):
+        names = {"photo": "照片", "audio": "录音", "video": "视频"}
+        if path:
+            self.pending_media.append((mtype, path))
+            self._update_media_status()
+            toast(f"{names.get(mtype, '附件')}已添加")
+        else:
+            toast("未获取到附件（请确认已授予相机/录音权限）")
+
+    def capture_photo(self):
+        if not media.is_android():
+            toast("拍照功能请在手机上使用"); return
+        toast("正在打开相机…")
+        media.take_picture(lambda p: self._add_pending("photo", p))
+
+    def capture_video(self):
+        if not media.is_android():
+            toast("录视频功能请在手机上使用"); return
+        toast("正在打开摄像…")
+        media.take_video(lambda p: self._add_pending("video", p))
+
+    def toggle_audio(self):
+        if not media.is_android():
+            toast("录音功能请在手机上使用"); return
+        if media.is_recording():
+            p = media.stop_audio()
+            self.audio_btn.text = "录音"
+            self.audio_btn.set_bg(PURPLE)
+            self._add_pending("audio", p)
+        else:
+            if media.start_audio():
+                self.audio_btn.text = "停止录音"
+                self.audio_btn.set_bg(PRIMARY)
+                toast("录音中…再次点击停止")
+            else:
+                toast("无法开始录音（请授予录音权限）")
 
     def toggle_timer(self):
         if not self.timer_running:
@@ -420,19 +513,28 @@ class MainScreen(Screen):
         self._save_checkin(minutes)
 
     def _save_checkin(self, minutes):
-        db.add_checkin(self.user["id"], self.cur_subject, minutes,
-                       self.content_in.text, mood=self.mood_spinner.text)
-        toast(f"{self.cur_subject} 学习 {minutes} 分钟，打卡成功！")
+        cid = db.add_checkin(self.user["id"], self.cur_subject, minutes,
+                             self.content_in.text, mood=self.mood_spinner.text)
+        n = len(self.pending_media)
+        for mtype, path in self.pending_media:
+            try:
+                db.add_media(cid, mtype, path)
+            except Exception:
+                pass
+        self.pending_media = []
+        self._update_media_status()
+        extra = f"（含 {n} 个附件）" if n else ""
+        toast(f"{self.cur_subject} 学习 {minutes} 分钟，打卡成功！{extra}")
         self.content_in.text = ""
         self.refresh_checkin()
 
     def refresh_checkin(self):
         # 今日状态
         self.status_row.clear_widgets()
-        for s in db.SUBJECTS:
+        for s in db.subject_names():
             done = db.has_checked_in_today(self.user["id"], s)
             chip = RoundButton(f"{s} {'已完成' if done else '未打卡'}",
-                               bg=SUBJECT_COLORS[s] if done else GREY,
+                               bg=subject_color(s) if done else GREY,
                                fg=(1, 1, 1, 1) if done else MUTED, fsize=12, bold=False)
             chip.disabled = True
             self.status_row.add_widget(chip)
@@ -447,17 +549,29 @@ class MainScreen(Screen):
             self.records_box.add_widget(self._record_row(r))
 
     def _record_row(self, r):
+        media_items = db.get_media(r["id"])
+        has_media = bool(media_items)
         row = card_box(orientation="horizontal", padding=10, spacing=8,
-                       size_hint_y=None, height=dp(60))
+                       size_hint_y=None, height=dp(64))
         info = BoxLayout(orientation="vertical")
         title = f"{r['subject']}  ·  {r['minutes']}分钟"
         info.add_widget(CL(title, size=15, bold=True, halign="left", valign="middle",
-                           text_size=(Window.width - dp(120), dp(26))))
+                           text_size=(Window.width - dp(160), dp(26))))
         sub = r["study_date"] + (f"  {r['content']}" if r["content"] else "")
+        if has_media:
+            cnt = {}
+            for m in media_items:
+                cnt[m["mtype"]] = cnt.get(m["mtype"], 0) + 1
+            nm = {"photo": "照片", "audio": "录音", "video": "视频"}
+            sub += "  [" + " ".join(f"{nm.get(k, k)}{v}" for k, v in cnt.items()) + "]"
         info.add_widget(CL(sub, size=12, color=MUTED, halign="left", valign="middle",
-                           text_size=(Window.width - dp(120), dp(22)), shorten=True))
+                           text_size=(Window.width - dp(160), dp(22)), shorten=True))
         row.add_widget(info)
-        edit = RoundButton("修改", bg=SECONDARY, fsize=13, size_hint_x=None, width=dp(64))
+        if has_media:
+            view = RoundButton("附件", bg=PURPLE, fsize=12, size_hint_x=None, width=dp(56))
+            view.bind(on_release=lambda *a, rec=r: MediaViewPopup(rec).open())
+            row.add_widget(view)
+        edit = RoundButton("修改", bg=SECONDARY, fsize=12, size_hint_x=None, width=dp(56))
         edit.bind(on_release=lambda *a, rec=r: EditPopup(self, rec).open())
         row.add_widget(edit)
         return row
@@ -522,7 +636,7 @@ class MainScreen(Screen):
 
         self.bars_box.clear_widgets()
         max_min = max((v["minutes"] for v in summary.values()), default=0) or 1
-        for s in db.SUBJECTS:
+        for s in summary.keys():
             v = summary[s]
             self.bars_box.add_widget(self._bar(s, v, max_min))
         tot_t = sum(v["times"] for v in summary.values())
@@ -541,7 +655,7 @@ class MainScreen(Screen):
         with track.canvas.before:
             Color(0.92, 0.92, 0.92, 1)
             bg = RoundedRectangle(radius=[dp(10)])
-            Color(*SUBJECT_COLORS[subject])
+            Color(*subject_color(subject))
             fg = RoundedRectangle(radius=[dp(10)])
 
         def upd(*a):
@@ -602,6 +716,24 @@ class MainScreen(Screen):
         sm.add_widget(tb)
         body.add_widget(sm)
 
+        # 学习类目（科目）管理
+        sc = card_box(padding=12, spacing=8, size_hint_y=None)
+        sc.bind(minimum_height=sc.setter("height"))
+        sc.add_widget(CL("学习类目管理（语文/数学/英语之外可自定义）", size=14, bold=True,
+                         color=PURPLE, size_hint_y=None, height=dp(24), halign="left",
+                         text_size=(Window.width - dp(54), None)))
+        addg = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        self.new_subject = field("输入新类目，如：科学")
+        addg.add_widget(self.new_subject)
+        asb = RoundButton("添加", bg=SECONDARY, fsize=14, size_hint_x=None, width=dp(70))
+        asb.bind(on_release=lambda *a: self.add_subject_ui())
+        addg.add_widget(asb)
+        sc.add_widget(addg)
+        self.subj_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+        self.subj_box.bind(minimum_height=self.subj_box.setter("height"))
+        sc.add_widget(self.subj_box)
+        body.add_widget(sc)
+
         # 收件人
         rc = card_box(padding=12, spacing=8, size_hint_y=None)
         rc.bind(minimum_height=rc.setter("height"))
@@ -625,8 +757,40 @@ class MainScreen(Screen):
         body.add_widget(sendnow)
 
         sv.add_widget(body)
-        Clock.schedule_once(lambda dt: self.refresh_recipients(), 0)
+        Clock.schedule_once(lambda dt: (self.refresh_recipients(), self.refresh_subjects()), 0)
         return sv
+
+    def add_subject_ui(self):
+        name = self.new_subject.text.strip()
+        if not name:
+            toast("请输入类目名称"); return
+        try:
+            db.add_subject(name)
+            self.new_subject.text = ""
+            self.refresh_subjects()
+            toast("已添加类目")
+        except ValueError as e:
+            toast(str(e))
+
+    def refresh_subjects(self):
+        self.subj_box.clear_widgets()
+        subs = db.list_subjects()
+        for s in subs:
+            row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+            chip = RoundButton(s["name"], bg=subject_color(s["name"]), fsize=13,
+                               size_hint_x=None, width=dp(120))
+            chip.disabled = True
+            row.add_widget(chip)
+            row.add_widget(Label())
+            if len(subs) > 1:
+                d = RoundButton("删除", bg=PRIMARY, fsize=12, size_hint_x=None, width=dp(60))
+                d.bind(on_release=lambda *a, sid=s["id"]: self._del_subject(sid))
+                row.add_widget(d)
+            self.subj_box.add_widget(row)
+
+    def _del_subject(self, sid):
+        db.delete_subject(sid)
+        self.refresh_subjects()
 
     def save_smtp(self, save_config):
         from core.config import load_config
@@ -696,7 +860,7 @@ class EditPopup(Popup):
         self.screen = screen
         self.record = record
         body = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
-        self.subj = cn_spinner(record["subject"], db.SUBJECTS, SECONDARY, (1, 1, 1, 1))
+        self.subj = cn_spinner(record["subject"], db.subject_names(), SECONDARY, (1, 1, 1, 1))
         body.add_widget(self.subj)
         self.date_in = field("日期 YYYY-MM-DD", text=record["study_date"])
         body.add_widget(self.date_in)
@@ -739,13 +903,52 @@ class EditPopup(Popup):
         self.screen.refresh_checkin()
 
 
+class MediaViewPopup(Popup):
+    """查看某条打卡的附件：照片在 App 内预览；录音/视频列出文件。"""
+    def __init__(self, record, **kw):
+        import os as _os
+        items = db.get_media(record["id"])
+        sv = ScrollView()
+        box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(10),
+                        size_hint_y=None)
+        box.bind(minimum_height=box.setter("height"))
+        nm = {"photo": "照片", "audio": "录音", "video": "视频"}
+        if not items:
+            box.add_widget(CL("没有附件", size=14, color=MUTED, size_hint_y=None, height=dp(30)))
+        for m in items:
+            exists = _os.path.exists(m["path"])
+            if m["mtype"] == "photo" and exists:
+                box.add_widget(Image(source=m["path"], size_hint_y=None, height=dp(240),
+                                     allow_stretch=True, keep_ratio=True))
+            else:
+                tip = nm.get(m["mtype"], "附件") + ("" if exists else "（文件缺失）")
+                box.add_widget(CL(f"{tip}：{_os.path.basename(m['path'])}", size=13,
+                                  color=TEXT, size_hint_y=None, height=dp(30), halign="left",
+                                  text_size=(Window.width * 0.8, None)))
+        sv.add_widget(box)
+        wrap = BoxLayout(orientation="vertical", spacing=dp(8))
+        wrap.add_widget(sv)
+        close = RoundButton("关闭", bg=GREY, fg=TEXT, size_hint_y=None, height=dp(44))
+        close.bind(on_release=lambda *a: self.dismiss())
+        wrap.add_widget(close)
+        super().__init__(title="打卡附件", title_font=FONT, content=wrap,
+                         size_hint=(0.95, 0.85), **kw)
+
+
 # ================= App =================
 class StudyApp(App):
     def build(self):
         self.title = "学习小管家"
         Window.clearcolor = BG
+        # 修复手机/平板上输入框点按时键盘反复弹出又收起：让窗口随键盘上移而非整屏 resize
+        try:
+            Window.softinput_mode = "below_target"
+        except Exception:
+            pass
         storage.init_storage()
         db.init_db()
+        # 申请相机/录音/存储权限（用于拍照、录音、录视频）
+        media.request_permissions_async()
         # 后台定时邮件
         self.scheduler = email_service.EmailScheduler()
         self.scheduler.start()

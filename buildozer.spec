@@ -13,8 +13,8 @@ source.include_patterns = assets/fonts/*,core/seed/*
 
 version = 1.0
 
-# 依赖
-requirements = python3,kivy==2.3.0
+# 依赖（plyer/pyjnius 用于拍照、录音、录视频；android 模块由打包引导自动提供，无需在此列出）
+requirements = python3,kivy==2.3.0,plyer,pyjnius
 
 # 关键：把 python-for-android 钉到 v2024.01.21，它打包 Python 3.11.5（与 Kivy 2.3.0 兼容）。
 # 新版 p4a（v2026.05.09）会打包 Python 3.14，导致 Kivy 2.3.0 的 C 扩展编译失败。
@@ -24,8 +24,8 @@ p4a.branch = v2024.01.21
 orientation = portrait
 fullscreen = 0
 
-# 安卓权限（发送邮件需要联网）
-android.permissions = INTERNET
+# 安卓权限（联网发邮件 + 拍照/录音/读写存储）
+android.permissions = INTERNET,CAMERA,RECORD_AUDIO,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
 
 # 安卓 API / 架构（只构建 arm64-v8a：覆盖绝大多数手机，构建更快更稳；
 # 如需兼容很老的 32 位机再加 armeabi-v7a）

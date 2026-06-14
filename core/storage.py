@@ -33,6 +33,14 @@ DATA_DIR = _base_dir()
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 DB_PATH = os.path.join(DATA_DIR, "study.db")
 REMEMBER_PATH = os.path.join(DATA_DIR, "remember.json")
+MEDIA_DIR = os.path.join(DATA_DIR, "media")  # 拍照/录音/录视频存放目录
+
+
+def media_path(ext):
+    """生成一个唯一的附件文件路径（按时间戳）。"""
+    import time
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    return os.path.join(MEDIA_DIR, f"{int(time.time() * 1000)}.{ext}")
 
 
 def _copy_if_absent(seed_name, dest):

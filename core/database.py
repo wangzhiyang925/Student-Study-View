@@ -8,7 +8,14 @@ from datetime import date, datetime, timedelta
 from . import storage
 
 DB_PATH = storage.DB_PATH
-SUBJECTS = ["语文", "数学", "英语"]
+
+# 默认科目（首次建库时种入；之后管理员可在 App 内增删）
+DEFAULT_SUBJECTS = [("语文", "#FF6B6B"), ("数学", "#4D96FF"), ("英语", "#06D6A0")]
+# 兜底常量（仅在数据库尚不可用时使用）；实际科目请用 subject_names()
+SUBJECTS = [s[0] for s in DEFAULT_SUBJECTS]
+# 新增科目自动分配的备选配色
+SUBJECT_PALETTE = ["#FFD166", "#9B5DE5", "#F15BB5", "#00BBF9", "#FB5607",
+                   "#8AC926", "#FF924C", "#118AB2"]
 
 
 def _connect():
@@ -70,9 +77,33 @@ def init_db():
                 note        TEXT DEFAULT '',
                 created_at  TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS subjects (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT UNIQUE NOT NULL,
+                color       TEXT DEFAULT '#4D96FF',
+                sort        INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS checkin_media (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                checkin_id  INTEGER NOT NULL,
+                mtype       TEXT NOT NULL,
+                path        TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                FOREIGN KEY (checkin_id) REFERENCES checkins(id) ON DELETE CASCADE
+            );
             """
         )
         conn.commit()
+
+        # 种入默认科目
+        cur = conn.execute("SELECT COUNT(*) AS c FROM subjects")
+        if cur.fetchone()["c"] == 0:
+            for i, (name, color) in enumerate(DEFAULT_SUBJECTS):
+                conn.execute("INSERT OR IGNORE INTO subjects (name, color, sort) VALUES (?,?,?)",
+                             (name, color, i))
+            conn.commit()
 
         cur = conn.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin'")
         if cur.fetchone()["c"] == 0:
@@ -157,19 +188,20 @@ def _user_to_dict(row):
 
 # ---------------- 打卡 ----------------
 def add_checkin(user_id, subject, minutes, content, mood="😀", study_date=None):
-    if subject not in SUBJECTS:
+    if subject not in subject_names():
         raise ValueError("科目无效")
     if study_date is None:
         study_date = date.today().isoformat()
     conn = _connect()
     try:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO checkins (user_id, subject, study_date, minutes, content, mood, created_at)"
             " VALUES (?,?,?,?,?,?,?)",
             (user_id, subject, study_date, int(minutes), content.strip(), mood,
              datetime.now().isoformat(timespec="seconds")),
         )
         conn.commit()
+        return cur.lastrowid
     finally:
         conn.close()
 
@@ -192,7 +224,7 @@ def get_checkins(user_id, start_date=None, end_date=None, subject=None):
 
 
 def update_checkin(checkin_id, user_id, subject, minutes, content, mood, study_date):
-    if subject not in SUBJECTS:
+    if subject not in subject_names():
         raise ValueError("科目无效")
     conn = _connect()
     try:
@@ -238,7 +270,7 @@ def subject_summary(user_id, start_date, end_date):
             "SELECT subject, COUNT(*) AS times, COALESCE(SUM(minutes),0) AS minutes"
             " FROM checkins WHERE user_id=? AND study_date>=? AND study_date<=?"
             " GROUP BY subject", (user_id, start_date, end_date)).fetchall()
-        result = {s: {"times": 0, "minutes": 0} for s in SUBJECTS}
+        result = {s: {"times": 0, "minutes": 0} for s in subject_names()}
         for r in rows:
             result[r["subject"]] = {"times": r["times"], "minutes": r["minutes"]}
         return result
@@ -261,6 +293,96 @@ def streak_days(user_id):
             streak += 1
             cur = cur - timedelta(days=1)
         return streak
+    finally:
+        conn.close()
+
+
+# ---------------- 科目（类目）----------------
+def list_subjects():
+    """返回 [{id, name, color, sort}]，按 sort、id 排序。"""
+    conn = _connect()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM subjects ORDER BY sort, id").fetchall()]
+    finally:
+        conn.close()
+
+
+def subject_names():
+    """返回当前科目名称列表；数据库异常时回退到默认。"""
+    try:
+        names = [s["name"] for s in list_subjects()]
+        return names or SUBJECTS
+    except Exception:
+        return SUBJECTS
+
+
+def subject_color_map():
+    """返回 {name: color_hex}。"""
+    try:
+        return {s["name"]: s["color"] for s in list_subjects()}
+    except Exception:
+        return {n: c for n, c in DEFAULT_SUBJECTS}
+
+
+def add_subject(name, color=None):
+    name = name.strip()
+    if not name:
+        raise ValueError("科目名称不能为空")
+    conn = _connect()
+    try:
+        if color is None:
+            cnt = conn.execute("SELECT COUNT(*) AS c FROM subjects").fetchone()["c"]
+            color = SUBJECT_PALETTE[cnt % len(SUBJECT_PALETTE)]
+        try:
+            conn.execute("INSERT INTO subjects (name, color, sort) VALUES (?,?,?)",
+                         (name, color,
+                          conn.execute("SELECT COALESCE(MAX(sort),0)+1 AS s FROM subjects").fetchone()["s"]))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            raise ValueError("该科目已存在")
+    finally:
+        conn.close()
+
+
+def delete_subject(subject_id):
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM subjects WHERE id=?", (subject_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------- 打卡附件（照片 / 录音 / 视频）----------------
+def add_media(checkin_id, mtype, path):
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO checkin_media (checkin_id, mtype, path, created_at) VALUES (?,?,?,?)",
+            (checkin_id, mtype, path, datetime.now().isoformat(timespec="seconds")))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_media(checkin_id):
+    conn = _connect()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM checkin_media WHERE checkin_id=? ORDER BY id", (checkin_id,)).fetchall()]
+    finally:
+        conn.close()
+
+
+def last_checkin_id(user_id):
+    """取该用户最近一条打卡的 id（用于打卡后挂附件）。"""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT id FROM checkins WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            (user_id,)).fetchone()
+        return row["id"] if row else None
     finally:
         conn.close()
 

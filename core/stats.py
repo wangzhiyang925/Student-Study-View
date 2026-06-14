@@ -22,21 +22,22 @@ def build_student_report(user, frequency="daily"):
     total_times = sum(v["times"] for v in summary.values())
     total_minutes = sum(v["minutes"] for v in summary.values())
     icons = {"语文": "📚", "数学": "🔢", "英语": "🔤"}
+    subjects = list(summary.keys())
 
     lines = [f"【{user['display_name']}】{period}学习报告（{start} ~ {end}）", ""]
-    for subj in db.SUBJECTS:
+    for subj in subjects:
         s = summary[subj]
-        lines.append(f"  {icons[subj]} {subj}：打卡 {s['times']} 次，共 {s['minutes']} 分钟")
+        lines.append(f"  {icons.get(subj, '📘')} {subj}：打卡 {s['times']} 次，共 {s['minutes']} 分钟")
     lines.append("")
     lines.append(f"  合计：打卡 {total_times} 次，学习 {total_minutes} 分钟")
     lines.append(f"  连续打卡：{streak} 天 🔥")
     text = "\n".join(lines)
 
     rows_html = ""
-    for subj in db.SUBJECTS:
+    for subj in subjects:
         s = summary[subj]
         rows_html += (
-            f"<tr><td style='padding:8px 14px;font-size:16px'>{icons[subj]} {subj}</td>"
+            f"<tr><td style='padding:8px 14px;font-size:16px'>{icons.get(subj, '📘')} {subj}</td>"
             f"<td style='padding:8px 14px;text-align:center'>{s['times']} 次</td>"
             f"<td style='padding:8px 14px;text-align:center'>{s['minutes']} 分钟</td></tr>"
         )
