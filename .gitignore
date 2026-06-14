@@ -7,6 +7,9 @@ bin/
 # 本地运行数据（不提交，避免把本机登录态/数据库带上云）
 localdata/
 
+# 含邮箱授权码的种子配置：只保留本地，绝不入库（用 config.example.json 作模板）
+core/seed/config.json
+
 # Python
 __pycache__/
 *.pyc

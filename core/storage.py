@@ -48,7 +48,15 @@ def _copy_if_absent(seed_name, dest):
 
 
 def init_storage():
-    """首次运行导入种子数据。"""
+    """首次运行导入种子数据。
+
+    config.json 含邮箱授权码、只存在于本地（不入库）；云端构建没有它时，
+    退回到不含密码的 config.example.json 模板，用户在 App 内自行填写授权码。
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
-    _copy_if_absent("config.json", CONFIG_PATH)
+    if not os.path.exists(CONFIG_PATH):
+        if os.path.exists(os.path.join(SEED_DIR, "config.json")):
+            _copy_if_absent("config.json", CONFIG_PATH)
+        else:
+            _copy_if_absent("config.example.json", CONFIG_PATH)
     _copy_if_absent("study.db", DB_PATH)
