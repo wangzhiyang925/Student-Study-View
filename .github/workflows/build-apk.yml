@@ -1,6 +1,6 @@
 name: 构建安卓 APK
 
-# 推送到 main/master 或在 Actions 页面手动触发时运行
+# 推送到 main/master/APK 或在 Actions 页面手动触发时运行
 on:
   push:
     branches: [ main, master, APK ]
@@ -8,54 +8,45 @@ on:
 
 jobs:
   build-android:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: 调整权限（容器内 buildozer 以 uid 1000 运行）
+        run: sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
 
-      - name: 安装系统依赖
+      - name: 用官方 kivy/buildozer 容器构建 APK
+        # 官方镜像自带验证过的 SDK/NDK/Java/p4a 工具链。
+        # 两段式：先拉 SDK（允许停在许可证）→ 显式接受全部许可证 → 正式构建，
+        # 彻底规避“卡在 Android SDK License”导致的失败。
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
-            cmake libffi-dev libssl-dev build-essential ccache libltdl-dev
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/home/user/hostcwd \
+            --entrypoint /bin/bash \
+            kivy/buildozer:latest -c '
+              set -e
+              echo "===== 第一遍：准备 Android SDK（允许停在许可证）====="
+              yes | buildozer android debug || echo "首遍到此为止，下面接受许可证后重试"
+              for SDK_DIR in "$HOME/.buildozer/android/platform/android-sdk" \
+                             "$ANDROID_SDK_ROOT" "$ANDROID_HOME"; do
+                [ -d "$SDK_DIR" ] || continue
+                SM=$(find "$SDK_DIR" -name sdkmanager -type f 2>/dev/null | head -1)
+                if [ -n "$SM" ]; then
+                  echo "接受全部 SDK 许可证: $SM"
+                  yes | "$SM" --sdk_root="$SDK_DIR" --licenses || true
+                fi
+              done
+              echo "===== 第二遍：正式构建 ====="
+              yes | buildozer android debug
+            '
 
-      - name: 安装 Buildozer
-        run: |
-          python -m pip install --upgrade pip
-          pip install buildozer Cython==0.29.36
+      - name: 还原权限
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
 
-      - name: 缓存 Buildozer 全局目录
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-
-      - name: 预下载 Android SDK 并接受全部许可证
-        # buildozer 的 accept_sdk_license 不一定能接受所有许可证（SDK/build-tools 等多个），
-        # 这里先让它把 SDK 拉下来，再用 sdkmanager --licenses 显式全部接受，避免卡在许可证。
-        run: |
-          yes | buildozer android debug || echo "首次运行到此为止（多半停在许可证），下面显式接受许可证后再正式构建"
-          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
-          SDKMANAGER=$(find "$SDK_DIR" -name sdkmanager -type f 2>/dev/null | head -1)
-          if [ -n "$SDKMANAGER" ]; then
-            echo "找到 sdkmanager: $SDKMANAGER，接受所有许可证…"
-            yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" --licenses || true
-          else
-            echo "未找到 sdkmanager（SDK 可能尚未下载），继续尝试构建"
-          fi
-
-      - name: 构建 Debug APK
-        run: |
-          yes | buildozer android debug
+      - name: 列出产物
+        run: ls -la bin/ || true
 
       - name: 上传 APK
         uses: actions/upload-artifact@v4
