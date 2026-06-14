@@ -39,6 +39,20 @@ jobs:
             .buildozer
           key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
 
+      - name: 预下载 Android SDK 并接受全部许可证
+        # buildozer 的 accept_sdk_license 不一定能接受所有许可证（SDK/build-tools 等多个），
+        # 这里先让它把 SDK 拉下来，再用 sdkmanager --licenses 显式全部接受，避免卡在许可证。
+        run: |
+          yes | buildozer android debug || echo "首次运行到此为止（多半停在许可证），下面显式接受许可证后再正式构建"
+          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
+          SDKMANAGER=$(find "$SDK_DIR" -name sdkmanager -type f 2>/dev/null | head -1)
+          if [ -n "$SDKMANAGER" ]; then
+            echo "找到 sdkmanager: $SDKMANAGER，接受所有许可证…"
+            yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" --licenses || true
+          else
+            echo "未找到 sdkmanager（SDK 可能尚未下载），继续尝试构建"
+          fi
+
       - name: 构建 Debug APK
         run: |
           yes | buildozer android debug
