@@ -9,7 +9,9 @@ import threading
 from datetime import date, timedelta
 
 from kivy.config import Config
-Config.set("input", "mouse", "mouse,multitouch_on_demand")
+# 让 ScrollView 更容易识别“拖动滚动”意图：手指在按钮/输入框上也能拖动滑动页面
+Config.set("widgets", "scroll_timeout", "250")
+Config.set("widgets", "scroll_distance", "12")
 
 from kivy.app import App
 from kivy.core.text import LabelBase
@@ -373,41 +375,23 @@ class MainScreen(Screen):
         body.add_widget(subj_grid)
         self.pick_subject(self.cur_subject)
 
+        # 统一「上方文字 + 下方控件」排版的小工具
+        def section_label(txt):
+            return CL(txt, size=14, bold=True, size_hint_y=None, height=dp(24),
+                      halign="left", text_size=(Window.width - dp(28), None))
+
         # 计时打卡
         timer_card = card_box(padding=14, spacing=6, size_hint_y=None, height=dp(150))
         timer_card.add_widget(CL("计时打卡", size=15, bold=True, color=SECONDARY,
                                  size_hint_y=None, height=dp(24)))
         self.timer_label = CL("00:00:00", size=34, bold=True, size_hint_y=None, height=dp(48))
         timer_card.add_widget(self.timer_label)
-        self.timer_btn = RoundButton("▶ 开始计时", bg=SECONDARY, size_hint_y=None, height=dp(46))
+        self.timer_btn = RoundButton("开始计时", bg=SECONDARY, size_hint_y=None, height=dp(46))
         self.timer_btn.bind(on_release=lambda *a: self.toggle_timer())
         timer_card.add_widget(self.timer_btn)
         body.add_widget(timer_card)
 
-        # 以下统一「上方文字 + 下方输入/选择」的排版，整齐一致
-        def section_label(txt):
-            return CL(txt, size=14, bold=True, size_hint_y=None, height=dp(24),
-                      halign="left", text_size=(Window.width - dp(28), None))
-
-        # 时长（分钟）
-        body.add_widget(section_label("时长（分钟）"))
-        self.minutes_in = field("30", text="30")
-        body.add_widget(self.minutes_in)
-
-        # 今天学了什么
-        body.add_widget(section_label("今天学了什么"))
-        self.content_in = TextInput(hint_text="写一句今天学了什么吧", font_name=FONT,
-                                    font_size=dp(15), size_hint_y=None, height=dp(80),
-                                    background_color=(0.96, 0.97, 0.99, 1),
-                                    foreground_color=TEXT)
-        body.add_widget(self.content_in)
-
-        # 心情
-        body.add_widget(section_label("心情"))
-        self.mood_spinner = cn_spinner(self.cur_mood, MOODS, WARNING, TEXT)
-        body.add_widget(self.mood_spinner)
-
-        # 附件：拍照 / 录音 / 录视频
+        # 附件：拍照 / 录音 / 录视频（放在计时下面）
         body.add_widget(section_label("添加附件（照片 / 录音 / 视频）"))
         media_row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(46))
         photo_btn = RoundButton("拍照", bg=SECONDARY, fsize=14)
@@ -423,6 +407,19 @@ class MainScreen(Screen):
                                halign="left", text_size=(Window.width - dp(28), None))
         body.add_widget(self.media_status)
         self._update_media_status()
+
+        # 时长（分钟）
+        body.add_widget(section_label("时长（分钟）"))
+        self.minutes_in = field("30", text="30")
+        body.add_widget(self.minutes_in)
+
+        # 今天学了什么
+        body.add_widget(section_label("今天学了什么"))
+        self.content_in = TextInput(hint_text="写一句今天学了什么吧", font_name=FONT,
+                                    font_size=dp(15), size_hint_y=None, height=dp(80),
+                                    background_color=(0.96, 0.97, 0.99, 1),
+                                    foreground_color=TEXT)
+        body.add_widget(self.content_in)
 
         done = RoundButton("完成打卡", bg=SUCCESS, fsize=17, size_hint_y=None, height=dp(50))
         done.bind(on_release=lambda *a: self.submit_manual())
@@ -510,7 +507,7 @@ class MainScreen(Screen):
         if not self.timer_running:
             self.timer_running = True
             self.timer_seconds = 0
-            self.timer_btn.text = f"■ 结束计时并完成（{self.cur_subject}）"
+            self.timer_btn.text = f"结束计时并完成（{self.cur_subject}）"
             self.timer_btn.set_bg(PRIMARY)
             self.timer_event = Clock.schedule_interval(self._tick, 1)
         else:
@@ -521,7 +518,7 @@ class MainScreen(Screen):
             self._save_checkin(minutes)
             self.timer_seconds = 0
             self.timer_label.text = "00:00:00"
-            self.timer_btn.text = "▶ 开始计时"
+            self.timer_btn.text = "开始计时"
             self.timer_btn.set_bg(SECONDARY)
 
     def _tick(self, dt):
@@ -543,7 +540,7 @@ class MainScreen(Screen):
 
     def _save_checkin(self, minutes):
         cid = db.add_checkin(self.user["id"], self.cur_subject, minutes,
-                             self.content_in.text, mood=self.mood_spinner.text)
+                             self.content_in.text, mood="")
         n = len(self.pending_media)
         for mtype, path in self.pending_media:
             try:
@@ -594,13 +591,10 @@ class MainScreen(Screen):
             nm = {"photo": "照片", "audio": "录音", "video": "视频"}
             sub += "  [" + " ".join(f"{nm.get(k, k)}{v}" for k, v in cnt.items()) + "]"
         info.add_widget(CL(sub, size=12, color=MUTED, halign="left", valign="middle",
-                           text_size=(Window.width - dp(160), dp(22)), shorten=True))
+                           text_size=(Window.width - dp(110), dp(22)), shorten=True))
         row.add_widget(info)
-        if has_media:
-            view = RoundButton("附件", bg=PURPLE, fsize=12, size_hint_x=None, width=dp(56))
-            view.bind(on_release=lambda *a, rec=r: MediaViewPopup(rec).open())
-            row.add_widget(view)
-        edit = RoundButton("修改", bg=SECONDARY, fsize=12, size_hint_x=None, width=dp(56))
+        # 点「修改」即可查看/试听附件
+        edit = RoundButton("修改", bg=SECONDARY, fsize=12, size_hint_x=None, width=dp(64))
         edit.bind(on_release=lambda *a, rec=r: EditPopup(self, rec).open())
         row.add_widget(edit)
         return row
@@ -994,18 +988,39 @@ class EditPopup(Popup):
     def __init__(self, screen, record, **kw):
         self.screen = screen
         self.record = record
-        body = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+        self._sound = None
+
+        outer = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
+        sv = ScrollView()
+        body = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        body.bind(minimum_height=body.setter("height"))
+
+        def lab(t):
+            return CL(t, size=12, bold=True, color=TEXT, size_hint_y=None, height=dp(20),
+                      halign="left", text_size=(Window.width * 0.82, None))
+
+        body.add_widget(lab("科目"))
         self.subj = cn_spinner(record["subject"], db.subject_names(), SECONDARY, (1, 1, 1, 1))
         body.add_widget(self.subj)
+        body.add_widget(lab("日期"))
         self.date_in = field("日期 YYYY-MM-DD", text=record["study_date"])
         body.add_widget(self.date_in)
+        body.add_widget(lab("时长（分钟）"))
         self.min_in = field("时长(分钟)", text=str(record["minutes"]))
         body.add_widget(self.min_in)
+        body.add_widget(lab("学了什么"))
         self.cont_in = field("学了什么", text=record["content"] or "")
         body.add_widget(self.cont_in)
-        self.mood = cn_spinner(record["mood"] if record["mood"] in MOODS else "开心",
-                               MOODS, WARNING, TEXT)
-        body.add_widget(self.mood)
+
+        # 附件：照片可看、录音可听、视频提示在相册
+        items = db.get_media(record["id"])
+        if items:
+            body.add_widget(lab("附件（照片可看 · 录音可听）"))
+            for m in items:
+                self._add_media_widget(body, m)
+
+        sv.add_widget(body)
+        outer.add_widget(sv)
 
         btns = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
         save = RoundButton("保存", bg=SUCCESS, fsize=14)
@@ -1013,12 +1028,56 @@ class EditPopup(Popup):
         dele = RoundButton("删除", bg=PRIMARY, fsize=14)
         dele.bind(on_release=lambda *a: self.do_delete())
         cancel = RoundButton("取消", bg=GREY, fg=TEXT, fsize=14)
-        cancel.bind(on_release=lambda *a: self.dismiss())
+        cancel.bind(on_release=lambda *a: self._close())
         for b in (save, dele, cancel):
             btns.add_widget(b)
-        body.add_widget(btns)
-        super().__init__(title="修改记录", title_font=FONT, content=body,
-                         size_hint=(0.92, None), height=dp(400), **kw)
+        outer.add_widget(btns)
+        super().__init__(title="修改记录", title_font=FONT, content=outer,
+                         size_hint=(0.94, 0.9), **kw)
+
+    def _add_media_widget(self, body, m):
+        import os as _os
+        exists = _os.path.exists(m["path"])
+        if m["mtype"] == "photo" and exists:
+            body.add_widget(Image(source=m["path"], size_hint_y=None, height=dp(200),
+                                  allow_stretch=True, keep_ratio=True))
+        elif m["mtype"] == "audio":
+            b = RoundButton("播放录音" + ("" if exists else "（文件缺失）"),
+                            bg=PURPLE, size_hint_y=None, height=dp(42))
+            b.bind(on_release=lambda *a, p=m["path"], btn=b: self._play_audio(p, btn))
+            body.add_widget(b)
+        elif m["mtype"] == "video":
+            body.add_widget(CL("视频已录制（已存入手机相册，可在相册查看）", size=12,
+                               color=MUTED, size_hint_y=None, height=dp(30), halign="left",
+                               text_size=(Window.width * 0.82, None)))
+
+    def _play_audio(self, path, btn):
+        import os as _os
+        if not _os.path.exists(path):
+            toast("录音文件缺失"); return
+        try:
+            from kivy.core.audio import SoundLoader
+            if self._sound and self._sound.state == "play":
+                self._sound.stop()
+                btn.text = "播放录音"
+                return
+            self._sound = SoundLoader.load(path)
+            if self._sound:
+                self._sound.bind(on_stop=lambda *a: setattr(btn, "text", "播放录音"))
+                self._sound.play()
+                btn.text = "停止播放"
+            else:
+                toast("无法播放该录音格式")
+        except Exception:
+            toast("播放失败")
+
+    def _close(self):
+        try:
+            if self._sound:
+                self._sound.stop()
+        except Exception:
+            pass
+        self.dismiss()
 
     def do_save(self):
         try:
@@ -1028,46 +1087,15 @@ class EditPopup(Popup):
         except ValueError:
             toast("请输入正确的时长"); return
         db.update_checkin(self.record["id"], self.screen.user["id"], self.subj.text,
-                          minutes, self.cont_in.text, self.mood.text, self.date_in.text.strip())
-        self.dismiss()
+                          minutes, self.cont_in.text, self.record.get("mood", ""),
+                          self.date_in.text.strip())
+        self._close()
         self.screen.refresh_checkin()
 
     def do_delete(self):
         db.delete_checkin(self.record["id"], self.screen.user["id"])
-        self.dismiss()
+        self._close()
         self.screen.refresh_checkin()
-
-
-class MediaViewPopup(Popup):
-    """查看某条打卡的附件：照片在 App 内预览；录音/视频列出文件。"""
-    def __init__(self, record, **kw):
-        import os as _os
-        items = db.get_media(record["id"])
-        sv = ScrollView()
-        box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(10),
-                        size_hint_y=None)
-        box.bind(minimum_height=box.setter("height"))
-        nm = {"photo": "照片", "audio": "录音", "video": "视频"}
-        if not items:
-            box.add_widget(CL("没有附件", size=14, color=MUTED, size_hint_y=None, height=dp(30)))
-        for m in items:
-            exists = _os.path.exists(m["path"])
-            if m["mtype"] == "photo" and exists:
-                box.add_widget(Image(source=m["path"], size_hint_y=None, height=dp(240),
-                                     allow_stretch=True, keep_ratio=True))
-            else:
-                tip = nm.get(m["mtype"], "附件") + ("" if exists else "（文件缺失）")
-                box.add_widget(CL(f"{tip}：{_os.path.basename(m['path'])}", size=13,
-                                  color=TEXT, size_hint_y=None, height=dp(30), halign="left",
-                                  text_size=(Window.width * 0.8, None)))
-        sv.add_widget(box)
-        wrap = BoxLayout(orientation="vertical", spacing=dp(8))
-        wrap.add_widget(sv)
-        close = RoundButton("关闭", bg=GREY, fg=TEXT, size_hint_y=None, height=dp(44))
-        close.bind(on_release=lambda *a: self.dismiss())
-        wrap.add_widget(close)
-        super().__init__(title="打卡附件", title_font=FONT, content=wrap,
-                         size_hint=(0.95, 0.85), **kw)
 
 
 # ================= App =================
@@ -1075,9 +1103,10 @@ class StudyApp(App):
     def build(self):
         self.title = "学习小管家"
         Window.clearcolor = BG
-        # 修复手机/平板上输入框点按时键盘反复弹出又收起：让窗口随键盘上移而非整屏 resize
+        # 修复输入框键盘弹出又立刻收起：用 pan（整窗上移）而非 resize，焦点更稳定
         try:
-            Window.softinput_mode = "below_target"
+            Window.softinput_mode = "pan"
+            Window.keyboard_anim_args = {"d": 0.2, "t": "in_out_expo"}
         except Exception:
             pass
         storage.init_storage()
