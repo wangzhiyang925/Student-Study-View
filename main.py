@@ -135,7 +135,8 @@ def field(hint, password=False, text=""):
     ti = TextInput(hint_text=hint, text=text, password=password, multiline=False,
                    font_name=FONT, font_size=dp(16), size_hint_y=None, height=dp(46),
                    padding=[dp(10), dp(12)], background_color=(0.96, 0.97, 0.99, 1),
-                   foreground_color=TEXT, cursor_color=PRIMARY)
+                   foreground_color=TEXT, cursor_color=PRIMARY,
+                   use_bubble=True, use_handles=True)  # 长按出现 复制/粘贴 气泡
     return ti
 
 
@@ -435,7 +436,8 @@ class MainScreen(Screen):
         self.content_in = TextInput(hint_text="写一句今天学了什么吧", font_name=FONT,
                                     font_size=dp(15), size_hint_y=None, height=dp(80),
                                     background_color=(0.96, 0.97, 0.99, 1),
-                                    foreground_color=TEXT)
+                                    foreground_color=TEXT,
+                                    use_bubble=True, use_handles=True)
         body.add_widget(self.content_in)
 
         done = RoundButton("完成打卡", bg=SUCCESS, fsize=17, size_hint_y=None, height=dp(50))
@@ -804,7 +806,8 @@ class MainScreen(Screen):
         self.fb_content = TextInput(hint_text="写下你的意见或建议…", font_name=FONT,
                                     font_size=dp(15), size_hint_y=None, height=dp(90),
                                     background_color=(0.96, 0.97, 0.99, 1),
-                                    foreground_color=TEXT)
+                                    foreground_color=TEXT,
+                                    use_bubble=True, use_handles=True)
         fb.add_widget(self.fb_content)
         fbtn = RoundButton("发送反馈", bg=SUCCESS, size_hint_y=None, height=dp(44))
         fbtn.bind(on_release=lambda *a: self.send_feedback())
@@ -997,7 +1000,7 @@ class MainScreen(Screen):
         if self.timer_event:
             self.timer_event.cancel()
             self.timer_running = False
-        remember.clear()
+        # 不清除「记住我」凭据：退出后登录页仍保留账号密码，点登录即可再进
         App.get_running_app().enter_login()
 
 
@@ -1005,7 +1008,7 @@ class EditPopup(Popup):
     def __init__(self, screen, record, **kw):
         self.screen = screen
         self.record = record
-        self._sound = None
+        self._play_poll = None
 
         outer = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
         sv = ScrollView()
@@ -1072,26 +1075,32 @@ class EditPopup(Popup):
         import os as _os
         if not _os.path.exists(path):
             toast("录音文件缺失"); return
-        try:
-            from kivy.core.audio import SoundLoader
-            if self._sound and self._sound.state == "play":
-                self._sound.stop()
-                btn.text = "播放录音"
-                return
-            self._sound = SoundLoader.load(path)
-            if self._sound:
-                self._sound.bind(on_stop=lambda *a: setattr(btn, "text", "播放录音"))
-                self._sound.play()
-                btn.text = "停止播放"
-            else:
-                toast("无法播放该录音格式")
-        except Exception:
-            toast("播放失败")
+        if not media.is_android():
+            toast("录音播放请在手机上使用"); return
+        # 正在播放 → 停止
+        if media.is_playing():
+            media.stop_playback()
+            btn.text = "播放录音"
+            if self._play_poll:
+                self._play_poll.cancel(); self._play_poll = None
+            return
+        if media.play_audio(path):
+            btn.text = "停止播放"
+            # 轮询：播放结束后自动把按钮文字复位
+            def _poll(dt):
+                if not media.is_playing():
+                    btn.text = "播放录音"
+                    if self._play_poll:
+                        self._play_poll.cancel(); self._play_poll = None
+            self._play_poll = Clock.schedule_interval(_poll, 0.5)
+        else:
+            toast("无法播放该录音")
 
     def _close(self):
         try:
-            if self._sound:
-                self._sound.stop()
+            if self._play_poll:
+                self._play_poll.cancel(); self._play_poll = None
+            media.stop_playback()
         except Exception:
             pass
         self.dismiss()
@@ -1120,10 +1129,10 @@ class StudyApp(App):
     def build(self):
         self.title = "学习小管家"
         Window.clearcolor = BG
-        # 修复输入框键盘弹出又立刻收起：用 pan（整窗上移）而非 resize，焦点更稳定
+        # 键盘弹出时只把“焦点输入框”顶到键盘上方（below_target），
+        # 不像 pan 那样按整个键盘高度上推整窗，避免输入框被抬得太高看不全。
         try:
-            Window.softinput_mode = "pan"
-            Window.keyboard_anim_args = {"d": 0.2, "t": "in_out_expo"}
+            Window.softinput_mode = "below_target"
         except Exception:
             pass
         storage.init_storage()
@@ -1156,10 +1165,17 @@ class StudyApp(App):
         self.sm.current = "main"
 
     def enter_login(self):
-        self.login_screen.user.text = ""
-        self.login_screen.pwd.text = ""
-        self.login_screen._remember_on = False
-        self.login_screen._update_remember()
+        ls = self.login_screen
+        # 若之前勾选了「记住我」，退出后回填账号密码，直接点登录即可
+        creds = remember.load()
+        if creds:
+            ls.user.text, ls.pwd.text = creds[0], creds[1]
+            ls._remember_on = True
+        else:
+            ls.user.text = ""
+            ls.pwd.text = ""
+            ls._remember_on = False
+        ls._update_remember()
         self.sm.current = "login"
 
 
