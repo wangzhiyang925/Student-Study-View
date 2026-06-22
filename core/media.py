@@ -204,42 +204,56 @@ def _recover_latest(req, dest):
 
 
 def _on_activity_result(request, result, data):
+    """安卓 UI 线程回调：只做最小动作（取出 data uri、结果码），
+    其余拷贝/兜底全部交给 Kivy 主线程，避免跨线程导致闪退。"""
     from kivy.clock import Clock
-    global _diag
     info = _pending.pop(request, None)
     if not info:
-        _diag += " || noPending"
         return
     uri, dest, on_done = info
-    final = None
-    notes = ["res=%s" % result]
+    ok = False
     try:
-        if int(result) == -1:  # Activity.RESULT_OK
-            # 1) FileProvider 路径下相机已直接写入 dest，优先采用
+        ok = (int(result) == -1)
+    except Exception:
+        ok = False
+    data_uri = None
+    try:
+        if data is not None:
+            data_uri = data.getData()
+    except Exception:
+        data_uri = None
+    # 切到 Kivy 主线程处理（同一线程做 jnius + UI，最稳）
+    Clock.schedule_once(
+        lambda dt: _finish_capture(request, ok, uri, dest, data_uri, on_done), 0)
+
+
+def _finish_capture(request, ok, uri, dest, data_uri, on_done):
+    """在 Kivy 主线程里完成取文件；无论如何都安全调用 on_done，绝不抛出。"""
+    global _diag
+    final = None
+    notes = ["res=%s" % ("OK" if ok else "notOK")]
+    try:
+        if ok:
+            # 1) 相机若直接写入了 dest（FileProvider 情形）
             if dest and os.path.exists(dest) and os.path.getsize(dest) > 0:
                 final = dest
                 notes.append("destOK(%d)" % os.path.getsize(dest))
             else:
                 notes.append("destEmpty")
-                # 2) 个别相机把结果放在返回 intent 的 data 里
-                src = None
-                try:
-                    if data is not None and data.getData() is not None:
-                        src = data.getData()
-                        notes.append("dataUri")
-                except Exception as e:
-                    notes.append("dataERR:%s" % str(e)[:30])
-                if src is not None:
+                # 2) 从返回 intent 的 data，或我们给的输出 uri 里取
+                for tag, src in (("data", data_uri), ("out", uri)):
+                    if src is None or final is not None:
+                        continue
                     try:
                         _copy_uri(src, dest)
                         if os.path.exists(dest) and os.path.getsize(dest) > 0:
                             final = dest
-                            notes.append("copyOK")
+                            notes.append("copyOK@%s" % tag)
                         else:
-                            notes.append("copyEmpty")
+                            notes.append("copyEmpty@%s" % tag)
                     except Exception as e:
-                        notes.append("copyERR:%s" % str(e)[:40])
-                # 3) MIUI 兜底：从相册取最近一条
+                        notes.append("copyERR@%s:%s" % (tag, str(e)[:30]))
+                # 3) MIUI 兜底：从相册取最近一条非空
                 if final is None:
                     try:
                         rec, rnote = _recover_latest(request, dest)
@@ -248,12 +262,13 @@ def _on_activity_result(request, result, data):
                             final = rec
                     except Exception as e:
                         notes.append("recERR:%s" % str(e)[:40])
-        else:
-            notes.append("notOK")
     except Exception as e:
-        notes.append("hdlERR:%s" % str(e)[:40])
+        notes.append("finERR:%s" % str(e)[:40])
     _diag += " || " + "; ".join(notes)
-    Clock.schedule_once(lambda dt: on_done(final), 0)
+    try:
+        on_done(final)
+    except Exception:
+        pass
 
 
 def _capture(action, mime, ext, on_done, req):
@@ -413,3 +428,49 @@ def is_playing():
         return _player is not None and _player.isPlaying()
     except Exception:
         return False
+
+
+# ---------------- 视频播放：用系统播放器打开 ----------------
+def play_video(path):
+    """把视频写入 MediaStore 拿到 content URI，再用系统播放器（ACTION_VIEW）打开。
+    返回 (ok, note)。不依赖 FileProvider。"""
+    if not is_android():
+        return False, "notAndroid"
+    if not (path and os.path.exists(path) and os.path.getsize(path) > 0):
+        return False, "noFile"
+    try:
+        from jnius import autoclass, cast
+        act = _activity()
+        Intent = autoclass("android.content.Intent")
+        ContentValues = autoclass("android.content.ContentValues")
+        Video = autoclass("android.provider.MediaStore$Video$Media")
+        FileInputStream = autoclass("java.io.FileInputStream")
+        FileUtils = autoclass("android.os.FileUtils")
+        resolver = act.getContentResolver()
+        values = ContentValues()
+        values.put("_display_name", "play_%d.mp4" % int(time.time() * 1000))
+        values.put("mime_type", "video/mp4")
+        uri = resolver.insert(Video.EXTERNAL_CONTENT_URI, values)
+        if uri is None:
+            return False, "insNull"
+        out = resolver.openOutputStream(uri)
+        inp = FileInputStream(path)
+        try:
+            FileUtils.copy(inp, out)
+        finally:
+            try:
+                out.flush(); out.close()
+            except Exception:
+                pass
+            try:
+                inp.close()
+            except Exception:
+                pass
+        intent = Intent(Intent.ACTION_VIEW)
+        intent.setDataAndType(cast("android.net.Uri", uri), "video/mp4")
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        act.startActivity(intent)
+        return True, "ok"
+    except Exception as e:
+        return False, str(e)[:60]

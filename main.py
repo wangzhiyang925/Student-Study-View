@@ -14,6 +14,7 @@ Config.set("widgets", "scroll_timeout", "250")
 Config.set("widgets", "scroll_distance", "12")
 
 from kivy.app import App
+from kivy.base import ExceptionHandler, ExceptionManager
 from kivy.core.text import LabelBase
 from kivy.core.window import Window
 from kivy.clock import Clock, mainthread
@@ -1092,9 +1093,10 @@ class EditPopup(Popup):
             b.bind(on_release=lambda *a, p=m["path"], btn=b: self._play_audio(p, btn))
             body.add_widget(b)
         elif m["mtype"] == "video":
-            body.add_widget(CL("视频已录制（已存入手机相册，可在相册查看）", size=12,
-                               color=MUTED, size_hint_y=None, height=dp(30), halign="left",
-                               text_size=(Window.width * 0.82, None)))
+            b = RoundButton("播放视频" + ("" if exists else "（文件缺失）"),
+                            bg=WARNING, fg=TEXT, size_hint_y=None, height=dp(42))
+            b.bind(on_release=lambda *a, p=m["path"]: self._play_video(p))
+            body.add_widget(b)
 
     def _play_audio(self, path, btn):
         import os as _os
@@ -1120,6 +1122,16 @@ class EditPopup(Popup):
             self._play_poll = Clock.schedule_interval(_poll, 0.5)
         else:
             toast("无法播放该录音")
+
+    def _play_video(self, path):
+        import os as _os
+        if not _os.path.exists(path):
+            toast("视频文件缺失"); return
+        if not media.is_android():
+            toast("视频播放请在手机上使用"); return
+        ok, note = media.play_video(path)
+        if not ok:
+            toast("无法播放视频：" + str(note))
 
     def _close(self):
         try:
@@ -1150,10 +1162,23 @@ class EditPopup(Popup):
 
 
 # ================= App =================
+class _CrashGuard(ExceptionHandler):
+    """全局异常护栏：把"未捕获异常导致闪退"变成弹一条提示并继续运行，
+    既避免崩溃，也便于看到真正的报错信息。"""
+    def handle_exception(self, inst):
+        try:
+            msg = "运行出错：%s" % str(inst)[:120]
+            Clock.schedule_once(lambda dt: toast(msg), 0)
+        except Exception:
+            pass
+        return ExceptionManager.PASS
+
+
 class StudyApp(App):
     def build(self):
         self.title = "学习小管家"
         Window.clearcolor = BG
+        ExceptionManager.add_handler(_CrashGuard())
         # 键盘弹出时只把“焦点输入框”顶到键盘上方（below_target），
         # 不像 pan 那样按整个键盘高度上推整窗，避免输入框被抬得太高看不全。
         try:
