@@ -264,7 +264,7 @@ def _capture(action, mime, ext, on_done, req):
         return
     notes = []
     try:
-        from jnius import autoclass
+        from jnius import autoclass, cast
         if not _ensure_bound():
             notes.append("notBound")
         Intent = autoclass("android.content.Intent")
@@ -284,7 +284,8 @@ def _capture(action, mime, ext, on_done, req):
             return
 
         intent = Intent(action)
-        intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
+        # Uri 是 Parcelable；显式 cast，避免 pyjnius 把 putExtra 误配成 String 重载
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, cast("android.os.Parcelable", uri))
         intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                         | Intent.FLAG_GRANT_READ_URI_PERMISSION)
         # 把 URI 放进 clipData，系统会自动把读写权授予被启动的相机
