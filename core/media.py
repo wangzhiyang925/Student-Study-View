@@ -236,33 +236,33 @@ def _recover_latest(req, dest):
 
 
 def _on_activity_result(request, result, data):
-    """安卓 UI 线程回调：只做最小动作，重活交后台线程，避免卡死/跨线程崩溃。"""
+    """安卓 UI 线程回调。
+
+    关键：绝不在此线程里用 pyjnius 访问 data(Intent) 等 Java 对象——经真机日志确认，
+    在该回调线程上访问返回的 Intent 会触发原生层崩溃（JNI 线程环境不匹配），
+    Python 的 try/except 拦不住。这里只用纯 Python 值，重活全部交给后台线程。
+    """
     _log("onActivityResult req=%s" % request)
+    try:
+        ok = (int(result) == -1)
+        _log("result parsed ok=%s" % ok)
+    except Exception as e:
+        ok = False
+        _log("resultERR:%s" % str(e)[:40])
     info = _pending.pop(request, None)
     if not info:
         _log("no pending -> ignore")
         return
     uri, dest, on_done = info
-    ok = False
-    try:
-        ok = (int(result) == -1)
-    except Exception:
-        ok = False
-    data_uri = None
-    try:
-        if data is not None:
-            data_uri = data.getData()
-    except Exception:
-        data_uri = None
-    _log("ok=%s hasData=%s" % (ok, data_uri is not None))
     import threading
     threading.Thread(
         target=_finish_capture_bg,
-        args=(request, ok, uri, dest, data_uri, on_done), daemon=True).start()
+        args=(request, ok, uri, dest, on_done), daemon=True).start()
+    _log("bg thread started")
 
 
-def _finish_capture_bg(request, ok, uri, dest, data_uri, on_done):
-    """后台线程：完成取文件，最后切回 Kivy 主线程调 on_done。绝不抛出。"""
+def _finish_capture_bg(request, ok, uri, dest, on_done):
+    """后台线程：完成取文件（不碰返回 Intent，只用自己的 uri + 相册兜底）。绝不抛出。"""
     global _diag
     final = None
     notes = ["res=%s" % ("OK" if ok else "notOK")]
@@ -275,23 +275,20 @@ def _finish_capture_bg(request, ok, uri, dest, data_uri, on_done):
                 _log("destOK %d" % os.path.getsize(dest))
             else:
                 notes.append("destEmpty")
-                _log("destEmpty, try copy")
-                # 2) 从返回 intent 的 data，或我们给的输出 uri 里取
-                for tag, src in (("data", data_uri), ("out", uri)):
-                    if src is None or final is not None:
-                        continue
-                    try:
-                        _copy_uri(src, dest)
-                        if os.path.exists(dest) and os.path.getsize(dest) > 0:
-                            final = dest
-                            notes.append("copyOK@%s" % tag)
-                            _log("copyOK@%s" % tag)
-                        else:
-                            notes.append("copyEmpty@%s" % tag)
-                            _log("copyEmpty@%s" % tag)
-                    except Exception as e:
-                        notes.append("copyERR@%s:%s" % (tag, str(e)[:30]))
-                        _log("copyERR@%s:%s" % (tag, str(e)[:50]))
+                _log("destEmpty, copy from our uri")
+                # 2) 从我们给相机的输出 uri 里取（MediaStore 情形相机写在这里）
+                try:
+                    _copy_uri(uri, dest)
+                    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+                        final = dest
+                        notes.append("copyOK")
+                        _log("copyOK")
+                    else:
+                        notes.append("copyEmpty")
+                        _log("copyEmpty")
+                except Exception as e:
+                    notes.append("copyERR:%s" % str(e)[:30])
+                    _log("copyERR:%s" % str(e)[:50])
                 # 3) MIUI 兜底：从相册取最近一条非空
                 if final is None:
                     _log("try recover")
