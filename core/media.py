@@ -149,7 +149,9 @@ def _mediastore_dest_uri(action, mime, ext, req):
     else:
         Media = autoclass("android.provider.MediaStore$Images$Media")
     values = ContentValues()
-    values.put("_display_name", "study_%d.%s" % (req, ext))
+    # 用时间戳生成唯一文件名，避免与已存在记录冲突（之前固定名导致 UNIQUE constraint）
+    uniq = "study_%d.%s" % (int(time.time() * 1000), ext)
+    values.put("_display_name", uniq)
     values.put("mime_type", mime)
     try:
         uri = resolver.insert(Media.EXTERNAL_CONTENT_URI, values)
@@ -178,12 +180,19 @@ def _recover_latest(req, dest):
         if not cursor.moveToFirst():
             return None, "qEmpty"
         idx = cursor.getColumnIndex("_id")
-        _id = cursor.getLong(idx)
         ContentUris = autoclass("android.content.ContentUris")
-        item_uri = ContentUris.withAppendedId(collection, _id)
-        _copy_uri(item_uri, dest)
-        if os.path.exists(dest) and os.path.getsize(dest) > 0:
-            return dest, "recoverOK(%d)" % os.path.getsize(dest)
+        # 在最近几条里挑第一条非空的（跳过我们自己插入的空占位记录）
+        for _ in range(6):
+            try:
+                _id = cursor.getLong(idx)
+                item_uri = ContentUris.withAppendedId(collection, _id)
+                _copy_uri(item_uri, dest)
+                if os.path.exists(dest) and os.path.getsize(dest) > 0:
+                    return dest, "recoverOK(%d)" % os.path.getsize(dest)
+            except Exception:
+                pass
+            if not cursor.moveToNext():
+                break
         return None, "recoverEmpty"
     except Exception as e:
         return None, "recoverERR:%s" % str(e)[:40]
