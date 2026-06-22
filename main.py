@@ -426,6 +426,11 @@ class MainScreen(Screen):
                                halign="left", text_size=(Window.width - dp(28), None))
         body.add_widget(self.media_status)
         self._update_media_status()
+        # 排错用：查看上次拍摄日志（即使拍照闪退，重开后也能看到崩在哪一步）
+        logbtn = RoundButton("查看拍摄日志（排错用）", bg=GREY, fg=TEXT, fsize=12,
+                             size_hint_y=None, height=dp(34))
+        logbtn.bind(on_release=lambda *a: self._show_capture_log())
+        body.add_widget(logbtn)
 
         # 时长（分钟）
         body.add_widget(section_label("时长（分钟）"))
@@ -487,6 +492,10 @@ class MainScreen(Screen):
 
     @mainthread
     def _add_pending(self, mtype, path):
+        try:
+            media._log("UI _add_pending mtype=%s path=%s" % (mtype, bool(path)))
+        except Exception:
+            pass
         names = {"photo": "照片", "audio": "录音", "video": "视频"}
         if path:
             self.pending_media.append((mtype, path))
@@ -497,6 +506,27 @@ class MainScreen(Screen):
             self._show_capture_diag(names.get(mtype, "附件"))
         else:
             toast("未获取到附件（请确认已授予录音权限）")
+
+    def _show_capture_log(self):
+        try:
+            info = media.read_log()
+        except Exception as e:
+            info = f"(读取日志失败: {e})"
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10))
+        box.add_widget(CL("上次拍摄日志（请截图发给开发者）：", size=14, bold=True,
+                          color=PRIMARY, size_hint_y=None, height=dp(28),
+                          halign="left", text_size=(Window.width * 0.78, None)))
+        sv = ScrollView()
+        lbl = CL(info, size=12, color=TEXT, halign="left", valign="top",
+                 size_hint_y=None, text_size=(Window.width * 0.78, None))
+        lbl.bind(texture_size=lambda w, s: setattr(lbl, "height", s[1] + dp(8)))
+        sv.add_widget(lbl)
+        box.add_widget(sv)
+        p = Popup(title="拍摄日志", title_font=FONT, content=box, size_hint=(0.94, 0.8))
+        close = RoundButton("关闭", bg=GREY, fg=TEXT, fsize=14, size_hint_y=None, height=dp(44))
+        close.bind(on_release=lambda *a: p.dismiss())
+        box.add_widget(close)
+        p.open()
 
     def _show_capture_diag(self, name):
         try:

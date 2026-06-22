@@ -26,6 +26,38 @@ _audio_path = None
 _player = None
 _diag = ""           # 最近一次拍照/录视频的诊断信息
 
+# 持久化拍摄日志：即使闪退也能事后在 App 里查看，定位崩在哪一步
+_LOG_PATH = os.path.join(storage.DATA_DIR, "capture_log.txt")
+
+
+def _log(msg):
+    try:
+        line = "%s %s" % (time.strftime("%H:%M:%S"), msg)
+    except Exception:
+        line = msg
+    try:
+        with open(_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def read_log():
+    try:
+        with open(_LOG_PATH, "r", encoding="utf-8") as f:
+            data = f.read()
+        return data or "(日志为空)"
+    except Exception:
+        return "(暂无拍摄日志，先尝试拍照/录视频)"
+
+
+def clear_log():
+    try:
+        if os.path.exists(_LOG_PATH):
+            os.remove(_LOG_PATH)
+    except Exception:
+        pass
+
 
 def diag():
     return _diag or "(无诊断信息)"
@@ -204,11 +236,11 @@ def _recover_latest(req, dest):
 
 
 def _on_activity_result(request, result, data):
-    """安卓 UI 线程回调：只做最小动作（取出 data uri、结果码），
-    其余拷贝/兜底全部交给 Kivy 主线程，避免跨线程导致闪退。"""
-    from kivy.clock import Clock
+    """安卓 UI 线程回调：只做最小动作，重活交后台线程，避免卡死/跨线程崩溃。"""
+    _log("onActivityResult req=%s" % request)
     info = _pending.pop(request, None)
     if not info:
+        _log("no pending -> ignore")
         return
     uri, dest, on_done = info
     ok = False
@@ -222,13 +254,15 @@ def _on_activity_result(request, result, data):
             data_uri = data.getData()
     except Exception:
         data_uri = None
-    # 切到 Kivy 主线程处理（同一线程做 jnius + UI，最稳）
-    Clock.schedule_once(
-        lambda dt: _finish_capture(request, ok, uri, dest, data_uri, on_done), 0)
+    _log("ok=%s hasData=%s" % (ok, data_uri is not None))
+    import threading
+    threading.Thread(
+        target=_finish_capture_bg,
+        args=(request, ok, uri, dest, data_uri, on_done), daemon=True).start()
 
 
-def _finish_capture(request, ok, uri, dest, data_uri, on_done):
-    """在 Kivy 主线程里完成取文件；无论如何都安全调用 on_done，绝不抛出。"""
+def _finish_capture_bg(request, ok, uri, dest, data_uri, on_done):
+    """后台线程：完成取文件，最后切回 Kivy 主线程调 on_done。绝不抛出。"""
     global _diag
     final = None
     notes = ["res=%s" % ("OK" if ok else "notOK")]
@@ -238,8 +272,10 @@ def _finish_capture(request, ok, uri, dest, data_uri, on_done):
             if dest and os.path.exists(dest) and os.path.getsize(dest) > 0:
                 final = dest
                 notes.append("destOK(%d)" % os.path.getsize(dest))
+                _log("destOK %d" % os.path.getsize(dest))
             else:
                 notes.append("destEmpty")
+                _log("destEmpty, try copy")
                 # 2) 从返回 intent 的 data，或我们给的输出 uri 里取
                 for tag, src in (("data", data_uri), ("out", uri)):
                     if src is None or final is not None:
@@ -249,31 +285,46 @@ def _finish_capture(request, ok, uri, dest, data_uri, on_done):
                         if os.path.exists(dest) and os.path.getsize(dest) > 0:
                             final = dest
                             notes.append("copyOK@%s" % tag)
+                            _log("copyOK@%s" % tag)
                         else:
                             notes.append("copyEmpty@%s" % tag)
+                            _log("copyEmpty@%s" % tag)
                     except Exception as e:
                         notes.append("copyERR@%s:%s" % (tag, str(e)[:30]))
+                        _log("copyERR@%s:%s" % (tag, str(e)[:50]))
                 # 3) MIUI 兜底：从相册取最近一条非空
                 if final is None:
+                    _log("try recover")
                     try:
                         rec, rnote = _recover_latest(request, dest)
                         notes.append(rnote)
+                        _log("recover: %s" % rnote)
                         if rec:
                             final = rec
                     except Exception as e:
                         notes.append("recERR:%s" % str(e)[:40])
+                        _log("recERR:%s" % str(e)[:50])
     except Exception as e:
         notes.append("finERR:%s" % str(e)[:40])
+        _log("finERR:%s" % str(e)[:60])
     _diag += " || " + "; ".join(notes)
+    _log("done final=%s" % (final is not None))
+    from kivy.clock import Clock
+    Clock.schedule_once(lambda dt: _safe_done(on_done, final), 0)
+
+
+def _safe_done(on_done, final):
     try:
         on_done(final)
-    except Exception:
-        pass
+    except Exception as e:
+        _log("doneERR:%s" % str(e)[:60])
 
 
 def _capture(action, mime, ext, on_done, req):
     global _diag
     _diag = ""
+    clear_log()
+    _log("=== capture ext=%s req=%s ===" % (ext, req))
     if not is_android():
         on_done(None)
         return
@@ -282,6 +333,7 @@ def _capture(action, mime, ext, on_done, req):
         from jnius import autoclass, cast
         if not _ensure_bound():
             notes.append("notBound")
+        _log("bound ok=%s" % _bound)
         Intent = autoclass("android.content.Intent")
         MediaStore = autoclass("android.provider.MediaStore")
         act = _activity()
@@ -289,18 +341,22 @@ def _capture(action, mime, ext, on_done, req):
         # 首选 FileProvider（多目录自适应）
         uri, dest, note = _fileprovider_dest_uri(ext)
         notes.append(note)
+        _log("fp: %s" % note)
         # 退回 MediaStore
         if uri is None:
             uri, dest, note2 = _mediastore_dest_uri(action, mime, ext, req)
             notes.append(note2)
+            _log("ms: %s dest=%s" % (note2, dest))
         if uri is None:
             _diag = "; ".join(notes)
+            _log("no uri -> abort")
             on_done(None)
             return
 
         intent = Intent(action)
         # Uri 是 Parcelable；显式 cast，避免 pyjnius 把 putExtra 误配成 String 重载
         intent.putExtra(MediaStore.EXTRA_OUTPUT, cast("android.os.Parcelable", uri))
+        _log("putExtra ok")
         intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                         | Intent.FLAG_GRANT_READ_URI_PERMISSION)
         # 把 URI 放进 clipData，系统会自动把读写权授予被启动的相机
@@ -327,10 +383,13 @@ def _capture(action, mime, ext, on_done, req):
 
         _pending[req] = (uri, dest, on_done)
         _diag = "; ".join(notes)
+        _log("startActivityForResult... %s" % _diag)
         act.startActivityForResult(intent, req)
+        _log("startActivityForResult returned (相机已拉起)")
     except Exception as e:
         notes.append("capERR:%s" % str(e)[:60])
         _diag = "; ".join(notes)
+        _log("capERR:%s" % str(e)[:80])
         on_done(None)
 
 
