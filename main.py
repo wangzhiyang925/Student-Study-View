@@ -491,8 +491,33 @@ class MainScreen(Screen):
             self.pending_media.append((mtype, path))
             self._update_media_status()
             toast(f"{names.get(mtype, '附件')}已添加")
+        elif mtype in ("photo", "video"):
+            # 拍照/录视频失败：弹出可截图的诊断信息，便于定位真机问题
+            self._show_capture_diag(names.get(mtype, "附件"))
         else:
-            toast("未获取到附件（请确认已授予相机/录音权限）")
+            toast("未获取到附件（请确认已授予录音权限）")
+
+    def _show_capture_diag(self, name):
+        try:
+            info = media.diag()
+        except Exception as e:
+            info = f"(读取诊断失败: {e})"
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10))
+        box.add_widget(CL(f"{name}未获取到，诊断信息（请截图发给开发者）：",
+                          size=14, bold=True, color=PRIMARY, size_hint_y=None, height=dp(48),
+                          halign="left", valign="middle",
+                          text_size=(Window.width * 0.78, None)))
+        sv = ScrollView()
+        diag_lbl = CL(info, size=13, color=TEXT, halign="left", valign="top",
+                      size_hint_y=None, text_size=(Window.width * 0.78, None))
+        diag_lbl.bind(texture_size=lambda w, s: setattr(diag_lbl, "height", s[1] + dp(8)))
+        sv.add_widget(diag_lbl)
+        box.add_widget(sv)
+        p = Popup(title="拍摄诊断", title_font=FONT, content=box, size_hint=(0.92, 0.7))
+        close = RoundButton("关闭", bg=GREY, fg=TEXT, fsize=14, size_hint_y=None, height=dp(44))
+        close.bind(on_release=lambda *a: p.dismiss())
+        box.add_widget(close)
+        p.open()
 
     def capture_photo(self):
         if not media.is_android():

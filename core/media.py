@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """拍照 / 录音 / 录视频 / 录音播放（安卓原生实现）。
 
-拍照 / 录视频：用 FileProvider 把一个「App 专属外部目录」下的文件包装成 content URI，
-作为系统相机的 EXTRA_OUTPUT。相机直接把照片/视频写进这个文件——这是 MIUI/小米等
-机型上最可靠的方式（MediaStore 插入 URI 在部分机型上相机无法写入，导致“未获取到附件”）。
-如个别相机忽略 EXTRA_OUTPUT，再从返回 intent 的 data 里取内容兜底；最后才退回 MediaStore。
+拍照 / 录视频：用 FileProvider 把一个本地文件包装成 content URI 作为系统相机的
+EXTRA_OUTPUT，相机直接把照片/视频写进这个文件——这是 MIUI/小米等机型上最可靠的方式。
+为不依赖打包工具 file_paths 的具体配置，会在 外部files/外部cache/内部cache/内部files
+四个目录里逐一尝试 getUriForFile，哪个被 file_paths 覆盖就用哪个。
+若 FileProvider 不可用，再退回 MediaStore；相机若把结果放在返回 intent 里，也会兜底取用。
 
-录音：android.media.MediaRecorder 写入应用文件（m4a/AAC）。
-录音播放：android.media.MediaPlayer（SoundLoader 不支持 m4a/AAC）。
+录音：android.media.MediaRecorder（m4a/AAC）。录音播放：android.media.MediaPlayer。
 桌面（预览）下所有函数都安全降级。
+
+失败时会把每一步的诊断信息写入 _diag，UI 可调用 diag() 显示，便于真机排错。
 """
 import os
 import time
@@ -22,6 +24,11 @@ _bound = False
 _recorder = None
 _audio_path = None
 _player = None
+_diag = ""           # 最近一次拍照/录视频的诊断信息
+
+
+def diag():
+    return _diag or "(无诊断信息)"
 
 
 def is_android():
@@ -33,12 +40,11 @@ def request_permissions_async():
         return
     try:
         from android.permissions import request_permissions, Permission
-        request_permissions([
-            Permission.CAMERA,
-            Permission.RECORD_AUDIO,
-            Permission.READ_EXTERNAL_STORAGE,
-            Permission.WRITE_EXTERNAL_STORAGE,
-        ])
+        names = ["CAMERA", "RECORD_AUDIO", "READ_EXTERNAL_STORAGE",
+                 "WRITE_EXTERNAL_STORAGE",
+                 "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO"]  # 后两个为 Android 13+
+        perms = [getattr(Permission, n) for n in names if hasattr(Permission, n)]
+        request_permissions(perms)
     except Exception:
         pass
 
@@ -51,13 +57,15 @@ def _activity():
 def _ensure_bound():
     global _bound
     if _bound:
-        return
+        return True
     try:
         from android import activity
         activity.bind(on_activity_result=_on_activity_result)
         _bound = True
-    except Exception:
-        pass
+    except Exception as e:
+        global _diag
+        _diag = "bindERR:%s" % e
+    return _bound
 
 
 def _copy_uri(uri, dest):
@@ -68,7 +76,7 @@ def _copy_uri(uri, dest):
     FileOutputStream = autoclass("java.io.FileOutputStream")
     out = FileOutputStream(dest)
     try:
-        FileUtils = autoclass("android.os.FileUtils")  # API 29+（本应用 minSdk 已含相机机型）
+        FileUtils = autoclass("android.os.FileUtils")  # API 29+
         FileUtils.copy(inp, out)
     finally:
         try:
@@ -81,40 +89,56 @@ def _copy_uri(uri, dest):
             pass
 
 
-def _external_capture_path(ext):
-    """App 专属外部目录下的附件路径。
+def _fileprovider_dest_uri(ext):
+    """在多个候选目录里尝试用 FileProvider 生成可授权给相机的 content URI。
 
-    路径形如 /storage/emulated/0/Android/data/<包名>/files/captures/<时间戳>.<ext>，
-    App 无需任何权限即可读写，且被 FileProvider 默认的 external-path 覆盖，可授权给相机。
+    返回 (uri, dest, note)。失败时 uri/dest 为 None，note 记录原因。
     """
-    ctx = _activity()
-    base = ctx.getExternalFilesDir(None)
-    d = os.path.join(base.getAbsolutePath(), "captures")
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "%d.%s" % (int(time.time() * 1000), ext))
-
-
-def _fileprovider_uri(dest):
-    """用 FileProvider 把本地文件包装成可授权给相机的 content URI。"""
     from jnius import autoclass
     ctx = _activity()
     File = autoclass("java.io.File")
     authority = ctx.getPackageName() + ".fileprovider"
-    f = File(dest)
+
+    FP = None
     for cls in ("androidx.core.content.FileProvider",
                 "org.kivy.android.GenericFileProvider"):
         try:
             FP = autoclass(cls)
-            uri = FP.getUriForFile(ctx, authority, f)
-            if uri is not None:
-                return uri
+            break
         except Exception:
-            continue
-    return None
+            FP = None
+    if FP is None:
+        return None, None, "noFPclass"
+
+    # 候选目录，覆盖 file_paths 里可能声明的各种 path 类型
+    cands = []
+    for getter in ("getExternalFilesDir", "getExternalCacheDir",
+                   "getCacheDir", "getFilesDir"):
+        try:
+            d = (ctx.getExternalFilesDir(None) if getter == "getExternalFilesDir"
+                 else getattr(ctx, getter)())
+            if d is not None:
+                cands.append((getter, d.getAbsolutePath()))
+        except Exception:
+            pass
+
+    fname = "%d.%s" % (int(time.time() * 1000), ext)
+    errs = []
+    for tag, basepath in cands:
+        try:
+            d = os.path.join(basepath, "captures")
+            os.makedirs(d, exist_ok=True)
+            dest = os.path.join(d, fname)
+            uri = FP.getUriForFile(ctx, authority, File(dest))
+            if uri is not None:
+                return uri, dest, "fpOK@%s" % tag
+        except Exception as e:
+            errs.append("%s:%s" % (tag, str(e)[:40]))
+    return None, None, "fpFail[" + "|".join(errs) + "]"
 
 
-def _mediastore_uri(action, mime, ext, req):
-    """退路：在 MediaStore 建记录拿 content URI（FileProvider 不可用时）。"""
+def _mediastore_dest_uri(action, mime, ext, req):
+    """退路：在 MediaStore 建记录拿 content URI。返回 (uri, dest, note)。"""
     from jnius import autoclass
     act = _activity()
     ContentValues = autoclass("android.content.ContentValues")
@@ -127,70 +151,134 @@ def _mediastore_uri(action, mime, ext, req):
     values = ContentValues()
     values.put("_display_name", "study_%d.%s" % (req, ext))
     values.put("mime_type", mime)
-    uri = resolver.insert(Media.EXTERNAL_CONTENT_URI, values)
+    try:
+        uri = resolver.insert(Media.EXTERNAL_CONTENT_URI, values)
+    except Exception as e:
+        return None, None, "msERR:%s" % str(e)[:40]
     if uri is None:
-        return None, None
-    return uri, storage.media_path(ext)
+        return None, None, "msNull"
+    return uri, storage.media_path(ext), "msOK"
+
+
+def _recover_latest(req, dest):
+    """MIUI 等机型相机把照片/视频存进自己相册、没写 EXTRA_OUTPUT 时，
+    从 MediaStore 取最近一条复制到 dest。返回 dest 或 None。"""
+    from jnius import autoclass
+    act = _activity()
+    if req == REQ_VIDEO:
+        Media = autoclass("android.provider.MediaStore$Video$Media")
+    else:
+        Media = autoclass("android.provider.MediaStore$Images$Media")
+    collection = Media.EXTERNAL_CONTENT_URI
+    resolver = act.getContentResolver()
+    cursor = resolver.query(collection, None, None, None, "date_added DESC")
+    if cursor is None:
+        return None, "qNull"
+    try:
+        if not cursor.moveToFirst():
+            return None, "qEmpty"
+        idx = cursor.getColumnIndex("_id")
+        _id = cursor.getLong(idx)
+        ContentUris = autoclass("android.content.ContentUris")
+        item_uri = ContentUris.withAppendedId(collection, _id)
+        _copy_uri(item_uri, dest)
+        if os.path.exists(dest) and os.path.getsize(dest) > 0:
+            return dest, "recoverOK(%d)" % os.path.getsize(dest)
+        return None, "recoverEmpty"
+    except Exception as e:
+        return None, "recoverERR:%s" % str(e)[:40]
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
 
 
 def _on_activity_result(request, result, data):
     from kivy.clock import Clock
+    global _diag
     info = _pending.pop(request, None)
     if not info:
+        _diag += " || noPending"
         return
     uri, dest, on_done = info
     final = None
+    notes = ["res=%s" % result]
     try:
         if int(result) == -1:  # Activity.RESULT_OK
-            # FileProvider 路径下相机已直接写入 dest，优先采用
-            if os.path.exists(dest) and os.path.getsize(dest) > 0:
+            # 1) FileProvider 路径下相机已直接写入 dest，优先采用
+            if dest and os.path.exists(dest) and os.path.getsize(dest) > 0:
                 final = dest
+                notes.append("destOK(%d)" % os.path.getsize(dest))
             else:
-                # 个别相机忽略 EXTRA_OUTPUT，把结果放在返回 intent 的 data 里
+                notes.append("destEmpty")
+                # 2) 个别相机把结果放在返回 intent 的 data 里
                 src = None
                 try:
                     if data is not None and data.getData() is not None:
                         src = data.getData()
-                except Exception:
-                    src = None
-                if src is None:
-                    src = uri
-                try:
-                    _copy_uri(src, dest)
-                except Exception:
-                    pass
-                if os.path.exists(dest) and os.path.getsize(dest) > 0:
-                    final = dest
-    except Exception:
-        final = None
+                        notes.append("dataUri")
+                except Exception as e:
+                    notes.append("dataERR:%s" % str(e)[:30])
+                if src is not None:
+                    try:
+                        _copy_uri(src, dest)
+                        if os.path.exists(dest) and os.path.getsize(dest) > 0:
+                            final = dest
+                            notes.append("copyOK")
+                        else:
+                            notes.append("copyEmpty")
+                    except Exception as e:
+                        notes.append("copyERR:%s" % str(e)[:40])
+                # 3) MIUI 兜底：从相册取最近一条
+                if final is None:
+                    try:
+                        rec, rnote = _recover_latest(request, dest)
+                        notes.append(rnote)
+                        if rec:
+                            final = rec
+                    except Exception as e:
+                        notes.append("recERR:%s" % str(e)[:40])
+        else:
+            notes.append("notOK")
+    except Exception as e:
+        notes.append("hdlERR:%s" % str(e)[:40])
+    _diag += " || " + "; ".join(notes)
     Clock.schedule_once(lambda dt: on_done(final), 0)
 
 
 def _capture(action, mime, ext, on_done, req):
+    global _diag
+    _diag = ""
     if not is_android():
         on_done(None)
         return
+    notes = []
     try:
         from jnius import autoclass
-        _ensure_bound()
+        if not _ensure_bound():
+            notes.append("notBound")
         Intent = autoclass("android.content.Intent")
         MediaStore = autoclass("android.provider.MediaStore")
         act = _activity()
 
-        # 首选 FileProvider：相机直接写进我们的文件，最稳
-        dest = _external_capture_path(ext)
-        uri = _fileprovider_uri(dest)
+        # 首选 FileProvider（多目录自适应）
+        uri, dest, note = _fileprovider_dest_uri(ext)
+        notes.append(note)
+        # 退回 MediaStore
         if uri is None:
-            uri, dest = _mediastore_uri(action, mime, ext, req)
-            if uri is None:
-                on_done(None)
-                return
+            uri, dest, note2 = _mediastore_dest_uri(action, mime, ext, req)
+            notes.append(note2)
+        if uri is None:
+            _diag = "; ".join(notes)
+            on_done(None)
+            return
 
         intent = Intent(action)
         intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
         intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                         | Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        # 把 URI 放进 clipData，系统会自动把读写权授予被启动的相机（兼容 Android 11+）
+        # 把 URI 放进 clipData，系统会自动把读写权授予被启动的相机
         try:
             ClipData = autoclass("android.content.ClipData")
             resolver = act.getContentResolver()
@@ -201,18 +289,23 @@ def _capture(action, mime, ext, on_done, req):
         try:
             pm = act.getPackageManager()
             infos = pm.queryIntentActivities(intent, 0)
-            for i in range(infos.size()):
+            n = infos.size()
+            notes.append("cam=%d" % n)
+            for i in range(n):
                 pkg = infos.get(i).activityInfo.packageName
                 act.grantUriPermission(
                     pkg, uri,
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     | Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        except Exception:
-            pass
+        except Exception as e:
+            notes.append("grantERR:%s" % str(e)[:30])
 
         _pending[req] = (uri, dest, on_done)
+        _diag = "; ".join(notes)
         act.startActivityForResult(intent, req)
-    except Exception:
+    except Exception as e:
+        notes.append("capERR:%s" % str(e)[:60])
+        _diag = "; ".join(notes)
         on_done(None)
 
 
@@ -272,7 +365,6 @@ def is_recording():
 
 # ---------------- 录音播放：MediaPlayer（支持 m4a/AAC）----------------
 def play_audio(path):
-    """用安卓 MediaPlayer 播放录音，返回 True/False。"""
     global _player
     if not is_android():
         return False

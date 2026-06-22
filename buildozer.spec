@@ -25,7 +25,7 @@ orientation = portrait
 fullscreen = 0
 
 # 安卓权限（联网发邮件 + 拍照/录音/读写存储）
-android.permissions = INTERNET,CAMERA,RECORD_AUDIO,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
+android.permissions = INTERNET,CAMERA,RECORD_AUDIO,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_IMAGES,READ_MEDIA_VIDEO
 
 # 安卓 API / 架构（只构建 arm64-v8a：覆盖绝大多数手机，构建更快更稳；
 # 如需兼容很老的 32 位机再加 armeabi-v7a）
